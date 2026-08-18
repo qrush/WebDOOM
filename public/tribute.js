@@ -19,7 +19,7 @@
  * heap and overwrite it with palette-quantised video every frame.
  */
 (function () {
-  var BUILD = 'rev18-word-scan+fallback';
+  var BUILD = 'rev20-rotate-acquire';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -190,6 +190,18 @@
     return false;
   }
 
+  /* mobj_t lays out: thinker, x, y, z, snext*, sprev*, angle (p_mobj.h:248).
+     Pointers are 4 bytes under wasm32, so angle sits 5 int32s past x.
+     angle_t is a full-circle-is-2^32 BAM, and 0 points east (+x). */
+  var ANGLE_WORD_OFFSET = 5;
+
+  function playerAngle() {
+    if (playerAddr < 0 || !refreshViews()) return null;
+    // read unsigned: angle_t uses the whole 32-bit range
+    var raw = i32[(playerAddr >> 2) + ANGLE_WORD_OFFSET] >>> 0;
+    return raw / 4294967296 * Math.PI * 2;
+  }
+
   function playerPos() {
     if (playerAddr < 0 || !refreshViews()) return null;
     var a = playerAddr >> 2;
@@ -283,22 +295,31 @@
      it. Starting the next search just below the last hit turns a ~256MB sweep
      per screen into a near-instant one; the cursor still wraps for a full
      sweep if the guess is wrong. */
-  var lastFound = -1;
+  var lastFound = -1, acqIdx = 0;
 
   function acquire() {
     if (frames % ACQUIRE_EVERY !== 0) return;
     var t0 = performance.now();
-    for (var i = 0; i < screens.length; i++) {
-      var sc = screens[i];
+
+    /* Rotate through the unlocated screens instead of always retrying the
+       first one. DOOM builds a wall texture's composite lazily, the first time
+       that wall is drawn, so screens behind the player simply do not exist in
+       memory yet. Restarting at index 0 every time meant one never-yet-drawn
+       screen blocked every other screen from ever being scanned. */
+    for (var n = 0; n < screens.length; n++) {
+      var idx = (acqIdx + n) % screens.length;
+      var sc = screens[idx];
       if (sc.addr >= 0) continue;
       if (!sc.primed && lastFound >= 0) {
         sc.cursor = Math.max(0, (lastFound >> 2) - (512 << 10));
         sc.primed = true;
       }
       if (scanFor(sc)) lastFound = sc.addr;
+      acqIdx = (idx + 1) % screens.length;
       scanCost = performance.now() - t0;
       return;
     }
+
     if (playerAddr < 0 && !resolvePlayer()) scanPlayerChunk();
     scanCost = performance.now() - t0;
   }
@@ -343,9 +364,30 @@
     return best;
   }
 
+  /* The screen the player is actually LOOKING at, which is what the overlay
+     should open -- "nearest" is wrong in an octagon, where the wall behind you
+     is often closer than the one filling your view. Picks the smallest angular
+     offset from the view direction, using distance only to break ties, and
+     falls back to nearest if nothing is within roughly the field of view. */
+  function facingScreen() {
+    var p = playerPos(), a = playerAngle();
+    if (!p || a === null) return nearestScreen();
+    var best = null, bestOff = Infinity;
+    for (var i = 0; i < screens.length; i++) {
+      var c = screens[i].def.centre;
+      var bearing = Math.atan2(c[1] - p[1], c[0] - p[0]);
+      var d = Math.abs(((bearing - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      if (d < bestOff - 0.01 ||
+          (Math.abs(d - bestOff) <= 0.01 && best && screens[i].dist < best.dist)) {
+        bestOff = d; best = screens[i];
+      }
+    }
+    return (best && bestOff < Math.PI / 2) ? best : nearestScreen();
+  }
+
   function openOverlay() {
     if (overlay) return;
-    var sc = nearestScreen();
+    var sc = facingScreen();
     if (!sc || !sc.id) return;
     overlay = document.createElement('div');
     overlay.id = 'tribute-overlay';
@@ -394,11 +436,27 @@
     if (c) { c.setAttribute('tabindex', '0'); c.focus(); }
   }
 
+  /* Fullscreen the stage ourselves rather than using Module.requestFullscreen:
+     emscripten's helper either leaves the canvas at its native size (letterboxed
+     off-centre) or resizes the backing store, which the software renderer can't
+     follow. Scaling the element with CSS keeps aspect and stays crisp. */
   function goFullscreen() {
-    // emscripten's helper keeps the canvas aspect and grabs pointer lock
-    if (Module && typeof Module.requestFullscreen === 'function') Module.requestFullscreen(false, false);
-    else if (Module && Module.canvas && Module.canvas.requestFullscreen) Module.canvas.requestFullscreen();
+    var stage = document.getElementById('stage');
+    if (!document.fullscreenElement) {
+      (stage.requestFullscreen ? stage.requestFullscreen() : Promise.reject())
+        .then(lockPointer)
+        .catch(function () {});
+    } else {
+      document.exitFullscreen();
+    }
     focusGame();
+  }
+
+  /* Without pointer lock the mouse runs out of window and turning stops, which
+     reads as "I can't turn all the way around". */
+  function lockPointer() {
+    var c = Module && Module.canvas;
+    if (c && c.requestPointerLock) { try { c.requestPointerLock(); } catch (e) {} }
   }
 
   /* --------------------------------- boot -------------------------------- */
@@ -455,7 +513,7 @@
 
     var hint = document.createElement('div');
     hint.id = 'tribute-hint';
-    hint.textContent = 'W A S D move · Q E turn · walk up to a screen to hear it · V for full quality';
+    hint.textContent = 'W A S D move · Q E turn (or mouse) · walk up to a screen to hear it · V to watch the one you are facing';
     document.body.appendChild(hint);
 
     ['pointerdown', 'keydown'].forEach(function (ev) {
@@ -470,7 +528,10 @@
     });
 
     if (Module && Module.canvas) {
-      Module.canvas.addEventListener('click', focusGame);
+      Module.canvas.addEventListener('click', function () {
+        focusGame();
+        if (document.fullscreenElement) lockPointer();
+      });
     }
   });
 
@@ -480,6 +541,8 @@
       return { name: s.def.name, addr: s.addr, dist: Math.round(s.dist), id: s.id, title: s.name };
     }); },
     player: playerPos,
+    angle: playerAngle,
+    facing: function () { var f = facingScreen(); return f && f.def.name; },
     open: openOverlay
   };
 })();

@@ -39,7 +39,14 @@
         //   call and makes the page unresponsive on every state transition.
         // -skill 2 is "Hurt Me Plenty"; irrelevant here (no monsters) but it
         //   stops the skill menu appearing.
-        arguments: ['-file', 'tribute.wad', '-warp', '1', '1', '-skill', '2'],
+        // -geom 1280x720 renders natively at 16:9. The default 640x480 is
+        //   4:3, so fullscreen on a widescreen display pillarboxes it with
+        //   black bars. src/d_main.c:1381 parses this; MAX_SCREENWIDTH is
+        //   2048 (doomdef.h:110) so 720p is comfortably in range.
+        // -window keeps SDL windowed; we do fullscreen ourselves via the DOM
+        //   so the canvas can scale with correct aspect and grab pointer lock.
+        arguments: ['-file', 'tribute.wad', '-warp', '1', '1', '-skill', '2',
+                    '-geom', '1280x720', '-window'],
 
         preRun: [function () {
           Module.addRunDependency('tribute-wad');

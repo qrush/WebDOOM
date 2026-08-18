@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebDOOM — 10 Year Tribute (test)</title>
+    <link rel="stylesheet" type="text/css" href="./tribute.css" />
+    <!-- must run BEFORE doom1.js so the WebGL hook is installed
+         before the game creates its context -->
+    <script type="text/javascript" src="./tribute.js"></script>
+  </head>
+
+  <body>
+    <div id="stage">
+      <canvas id="doom" oncontextmenu="event.preventDefault()"></canvas>
+      <div id="loader"><span>Loading DOOM…</span> <span id="progress">0.0%</span></div>
+    </div>
+
+    <script type="text/javascript">
+      window.Module = {
+        canvas: document.getElementById('doom'),
+        progress: document.getElementById('progress'),
+        loader: document.getElementById('loader'),
+
+        // -file tribute.wad : load our custom PWAD (prboom supports this
+        //   natively -- src/d_main.c:1037 -- so no engine rebuild needed)
+        // NOTE: we deliberately run the SOFTWARE renderer here.
+        //   src/m_misc.c:308-313 defaults videomode to "8" on non-MSVC builds,
+        //   so no WebGL context is ever created -- which is why the earlier
+        //   texture-streaming hook saw zero texImage2D calls. Forcing
+        //   `-vidmode gl` does reach the GL renderer (after patching a crash
+        //   and a throwing glTexGenfv stub -- see make-gl-build.py), but
+        //   emscripten's legacy GL emulation then renders an all-black frame,
+        //   so GL is not a usable path in this prebuilt engine.
+        arguments: ['-file', 'tribute.wad'],
+
+        preRun: [function () {
+          Module.addRunDependency('tribute-wad');
+          fetch('tribute.wad')
+            .then(function (r) {
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              return r.arrayBuffer();
+            })
+            .then(function (buf) {
+              FS.createDataFile('/', 'tribute.wad', new Uint8Array(buf), true, true, true);
+              if (window.__tributeGameLog) {
+                window.__tributeGameLog('[harness] tribute.wad written, ' + buf.byteLength + ' bytes');
+              }
+              Module.removeRunDependency('tribute-wad');
+            })
+            .catch(function (e) {
+              document.getElementById('loader').textContent = 'Failed to load tribute.wad: ' + e.message;
+            });
+        }],
+
+        // surface the engine's own stdout/stderr -- this is ground truth for
+        // which WADs loaded and which video mode it actually selected
+        print: function (t) { if (window.__tributeGameLog) window.__tributeGameLog(t); },
+        printErr: function (t) { if (window.__tributeGameLog) window.__tributeGameLog('! ' + t); },
+
+        setStatus: function (status) {
+          var m = status.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+          if (!m) { if (!status) this.loader.classList.add('done'); return; }
+          var pct = m[2] / m[4] * 100;
+          this.progress.textContent = pct.toFixed(1) + '%';
+          if (pct === 100) setTimeout(function () {
+            Module.loader.classList.add('done');
+          }, 400);
+        },
+        monitorRunDependencies: function () {}
+      };
+    </script>
+    <script type="text/javascript" src="./doom1.js"></script>
+  </body>
+</html>

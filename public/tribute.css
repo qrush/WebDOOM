@@ -1,0 +1,65 @@
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; background: #0b0b0d; color: #d8d8dc;
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+#stage {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+#doom {
+  max-width: 100%; max-height: 100vh;
+  image-rendering: pixelated; background: #000; display: block;
+}
+#loader {
+  position: absolute; inset: 0; display: flex; gap: .5em;
+  align-items: center; justify-content: center;
+  background: #0b0b0d; letter-spacing: .04em; transition: opacity .4s;
+}
+#loader.done { opacity: 0; pointer-events: none; }
+
+/* status + watch button */
+#tribute-bar {
+  position: fixed; top: 12px; right: 12px; z-index: 20;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(15,15,18,.92); border: 1px solid #2f2f38;
+  border-radius: 999px; padding: 6px 6px 6px 14px;
+}
+#tribute-status { font: 11px/1.4 ui-monospace, Menlo, monospace; color: #8a90a0; }
+#tribute-status.tribute-err { color: #ff8f8f; }
+#tribute-watch {
+  border: 0; border-radius: 999px; cursor: pointer;
+  background: #00cc00; color: #06210a; font-weight: 650; font-size: 12px;
+  padding: 7px 14px; white-space: nowrap;
+}
+#tribute-watch:hover { background: #21e021; }
+
+#tribute-hint {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  z-index: 20; color: #9aa0ae; font-size: 12px; letter-spacing: .02em;
+  background: rgba(15,15,18,.82); border: 1px solid #2f2f38;
+  border-radius: 999px; padding: 6px 14px; pointer-events: none;
+}
+
+/* full-quality Wistia overlay */
+#tribute-overlay {
+  position: fixed; inset: 0; z-index: 100; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(6,6,8,.86); backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity .28s ease;
+}
+#tribute-overlay.open { opacity: 1; }
+#tribute-overlay .to-inner {
+  position: relative; width: min(1100px, 92vw);
+  transform: scale(.97); transition: transform .28s ease;
+}
+#tribute-overlay.open .to-inner { transform: scale(1); }
+#tribute-overlay .to-close {
+  position: absolute; top: -40px; right: 0; z-index: 2;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(255,255,255,.1); color: #fff;
+  border: 1px solid rgba(255,255,255,.25);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+#tribute-overlay .to-close:hover { background: rgba(255,255,255,.2); }

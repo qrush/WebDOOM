@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>GL check</title>
+<style>
+body{margin:0;background:#0b0b0d;color:#cfd6e4;font:11px/1.5 ui-monospace,Menlo,monospace}
+#log{position:fixed;top:0;right:0;width:46%;height:100vh;overflow:auto;padding:10px;
+     background:#111;border-left:1px solid #333;white-space:pre-wrap}
+canvas{display:block}
+</style></head>
+<body>
+<canvas id="doom"></canvas>
+<div id="log"></div>
+<script>
+var LOG = document.getElementById('log');
+function L(s){ LOG.textContent += s + "\n"; }
+var q = new URLSearchParams(location.search);
+var args = (q.get('args') || '-vidmode,gl').split(',').filter(Boolean);
+// cfg=key:val,key:val  -> written to /home/web_user/.prboom/prboom.cfg
+var cfgPairs = (q.get('cfg') || '').split(',').filter(Boolean).map(function(p){
+  var i = p.indexOf(':'); return [p.slice(0,i), p.slice(i+1)];
+});
+L('ARGS: ' + JSON.stringify(args));
+L('CFG : ' + JSON.stringify(cfgPairs));
+L('');
+
+// count WebGL contexts so we can tell whether we even got that far
+var ctxCount = 0;
+var stats = {texImage2D:0, drawArrays:0, drawElements:0, clear:0, sizes:{}};
+var statsBox = document.createElement('div');
+statsBox.style.cssText='position:fixed;left:8px;bottom:8px;background:#000c;border:1px solid #444;'+
+  'padding:8px 10px;font:11px ui-monospace,Menlo,monospace;color:#8f8;white-space:pre;z-index:99';
+document.body.appendChild(statsBox);
+setInterval(function(){
+  var sz = Object.keys(stats.sizes).sort(function(a,b){return stats.sizes[b]-stats.sizes[a];})
+             .slice(0,8).map(function(k){return '  '+k+' x'+stats.sizes[k];}).join('\n');
+  statsBox.textContent =
+    'GL contexts : ' + ctxCount + '\n' +
+    'texImage2D  : ' + stats.texImage2D + '\n' +
+    'drawArrays  : ' + stats.drawArrays + '\n' +
+    'drawElements: ' + stats.drawElements + '\n' +
+    'clear       : ' + stats.clear + '\n' +
+    'glTodo      : ' + JSON.stringify(self.__glTodo||{}) + '\n' +
+    'texture sizes:\n' + sz;
+}, 500);
+
+function wrap(ctx, name, fn){
+  var orig = ctx[name];
+  if (typeof orig !== 'function') return;
+  ctx[name] = function(){ try { fn.apply(null, arguments); } catch(e){} return orig.apply(ctx, arguments); };
+}
+
+var origGC = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function(type){
+  var c = origGC.apply(this, arguments);
+  if (c && /webgl/i.test(type) && !c.__instr) {
+    c.__instr = true;
+    ctxCount++; L('>>> WebGL context created (#' + ctxCount + ')');
+    wrap(c,'texImage2D',function(t,level){
+      stats.texImage2D++;
+      if (level===0){
+        var w,h;
+        if (arguments.length>=9){ w=arguments[3]; h=arguments[4]; }
+        else { var s=arguments[5]; w=s&&(s.width||s.videoWidth); h=s&&(s.height||s.videoHeight); }
+        var k=w+'x'+h; stats.sizes[k]=(stats.sizes[k]||0)+1;
+      }
+    });
+    wrap(c,'drawArrays',function(){ stats.drawArrays++; });
+    wrap(c,'drawElements',function(){ stats.drawElements++; });
+    wrap(c,'clear',function(){ stats.clear++; });
+  }
+  return c;
+};
+
+window.Module = {
+  canvas: document.getElementById('doom'),
+  arguments: args,
+  preRun: [function(){
+    // ?wad=tribute.wad -> fetch it into the FS so -file can find it
+    var wad = q.get('wad');
+    if (wad) {
+      Module.addRunDependency('wad');
+      fetch(wad).then(function(r){ return r.arrayBuffer(); }).then(function(b){
+        FS.createDataFile('/', wad, new Uint8Array(b), true, true, true);
+        L('[harness] wrote ' + wad + ' (' + b.byteLength + ' bytes)');
+        Module.removeRunDependency('wad');
+      }).catch(function(e){ L('[harness] wad load failed: ' + e.message); Module.removeRunDependency('wad'); });
+    }
+  }, function(){
+    if (!cfgPairs.length) return;
+    var body = cfgPairs.map(function(kv){
+      var v = kv[1];
+      // quote non-numeric values, matching prboom's config format
+      return kv[0] + '\t\t' + (/^-?\d+$/.test(v) ? v : '"' + v + '"');
+    }).join('\n') + '\n';
+    try {
+      try { FS.mkdir('/home'); } catch(e){}
+      try { FS.mkdir('/home/web_user'); } catch(e){}
+      try { FS.mkdir('/home/web_user/.prboom'); } catch(e){}
+      FS.createDataFile('/home/web_user/.prboom', 'prboom.cfg', body, true, true, true);
+      L('[harness] wrote prboom.cfg:\n' + body);
+    } catch(e){ L('[harness] cfg write FAILED: ' + e.message); }
+  }],
+  print: function(t){ L(t); },
+  printErr: function(t){ L('! ' + t); },
+  setStatus: function(s){ if(s && /Running|Downloading data\.\.\. \(9/.test(s)) L('[status] ' + s); },
+  monitorRunDependencies: function(){}
+};
+window.addEventListener('error', function(e){ L('!! window error: ' + e.message); });
+</script>
+<script>
+// ?engine=doom1gl.js loads the GL-stub-patched build instead of stock
+var eng = new URLSearchParams(location.search).get('engine') || 'doom1.js';
+L('ENGINE: ' + eng);
+var sc = document.createElement('script');
+sc.src = './' + eng;
+document.body.appendChild(sc);
+</script>
+</body></html>

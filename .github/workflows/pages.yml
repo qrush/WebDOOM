@@ -1,0 +1,85 @@
+# Deploys the DOOM tribute to GitHub Pages.
+#
+# Why a workflow rather than "deploy from branch": public/ tracks ~212MB, but
+# the tribute needs only ~7.5MB of it. doom1.data (92MB), doom2.* (88MB) and
+# preview.gif (13MB) are all unused by this page -- doom1.data in particular is
+# superseded by tribute.data (see tools/repack_data.py). Assembling the site
+# here keeps those files in the repo for the original index.html while serving
+# only what the tribute actually loads.
+name: Deploy tribute to Pages
+
+on:
+  push:
+    branches: [tribute-video-wall]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it midway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p site
+
+          # tribute.html becomes the index so the URL is just the Pages root
+          cp public/tribute.html site/index.html
+
+          # page + engine + data. tribute-engine.js is doom1.js retargeted at
+          # the slim package; it loads tribute.data and doom1.wasm by name.
+          cp public/tribute.js          site/
+          cp public/tribute.css         site/
+          cp public/tribute-engine.js   site/
+          cp public/tribute.data        site/
+          cp public/doom1.wasm          site/
+
+          # the custom map, and the sidecars the video wall needs at runtime:
+          # texture signatures + expected composites + palette LUT + video IDs
+          cp public/tribute.wad         site/
+          cp public/screen.json         site/
+          cp public/screens.bin         site/
+          cp public/palette.lut         site/
+          cp public/videos.json         site/
+
+          touch site/.nojekyll
+
+      - name: Verify every asset the page requests is present
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in index.html tribute.js tribute.css tribute-engine.js \
+                   tribute.data doom1.wasm tribute.wad screen.json \
+                   screens.bin palette.lut videos.json; do
+            if [ ! -s "site/$f" ]; then echo "MISSING or empty: $f"; missing=1; fi
+          done
+          # tribute-engine.js must point at the slim package, not the 92MB one
+          grep -q '"tribute.data"' site/tribute-engine.js \
+            || { echo 'tribute-engine.js does not reference tribute.data'; missing=1; }
+          [ "$missing" = "0" ] || exit 1
+          echo "--- site contents ---"; ls -la site; du -sh site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

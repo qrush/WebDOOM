@@ -19,7 +19,7 @@
  * heap and overwrite it with palette-quantised video every frame.
  */
 (function () {
-  var BUILD = 'rev24-perf';
+  var BUILD = 'rev25-three-rooms';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -250,6 +250,34 @@
 
   /* ---------------------------- proximity audio --------------------------- */
 
+  var currentRoom = -1;
+
+  /* Which room the player is standing in, by nearest room centre. With 20
+     screens, decoding every video at once is hopeless -- only the current
+     room's videos are allowed to play; the rest are paused so they cost
+     nothing. */
+  function updateRoom(p) {
+    if (!p || !meta.rooms) return;
+    var best = -1, bestD = Infinity;
+    for (var i = 0; i < meta.rooms.length; i++) {
+      var c = meta.rooms[i].centre;
+      var d = Math.hypot(p[0] - c[0], p[1] - c[1]);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best === currentRoom) return;
+    currentRoom = best;
+    for (var k = 0; k < screens.length; k++) {
+      var sc = screens[k];
+      if (!sc.video) continue;
+      if (sc.def.room === currentRoom) {
+        if (sc.video.paused) sc.video.play().catch(function () {});
+      } else if (!sc.video.paused) {
+        sc.video.pause();
+        sc.video.volume = 0;
+      }
+    }
+  }
+
   var NEAR = 150, FAR = 430;      // map units: full volume -> silence
                                   // (scaled to the tighter 320-unit walls)
   var audioArmed = false;
@@ -268,7 +296,7 @@
     for (var i = 0; i < screens.length; i++) {
       var sc = screens[i];
       if (!sc.video) continue;
-      if (overlay || !audioArmed || !p) { sc.video.volume = 0; continue; }
+      if (overlay || !audioArmed || !p || sc.def.room !== currentRoom) { sc.video.volume = 0; continue; }
       var t = (FAR - sc.dist) / (FAR - NEAR);
       var g = Math.max(0, Math.min(1, t));
       sc.video.volume = g * g;          // gentler far-field falloff
@@ -370,7 +398,10 @@
       var c = screens[i].def.centre;
       screens[i].dist = p ? Math.hypot(p[0] - c[0], p[1] - c[1]) : 1e9;
     }
-    var order = screens.slice().sort(function (a, b) { return a.dist - b.dist; });
+    // only the current room's screens are candidates for blitting
+    var order = screens.filter(function (s) {
+      return currentRoom < 0 || s.def.room === currentRoom;
+    }).sort(function (a, b) { return a.dist - b.dist; });
 
     for (var h = 0; h < HOT && h < order.length; h++) {
       if (order[h].addr >= 0) blit(order[h]);
@@ -466,6 +497,7 @@
     var p = playerPos();
     statusEl.textContent =
       located + '/' + screens.length + ' screens · ' +
+      (currentRoom < 0 ? '' : meta.rooms[currentRoom].name + ' · ') +
       (p ? Math.round(nearestScreen().dist) + 'u away' : 'finding player') +
       ' · ' + frames + 'f · scan ' + scanCost.toFixed(1) + 'ms';
   }
@@ -529,7 +561,10 @@
         sc.name = r.name;
         sc.video = makeVideo(r.url);
         if (audioArmed) { sc.video.muted = false; sc.video.volume = 0; }
-        sc.video.play().catch(function () {});
+        // only the room the player is actually in gets to decode
+        if (currentRoom < 0 || sc.def.room === currentRoom) {
+          sc.video.play().catch(function () {});
+        }
       }).catch(function () { /* leave this wall as static */ });
     });
 
@@ -552,7 +587,7 @@
 
     var hint = document.createElement('div');
     hint.id = 'tribute-hint';
-    hint.textContent = 'W A S D move · Q E turn (or mouse) · walk closer to hear a screen · shoot a screen to watch it full quality';
+    hint.textContent = 'W A S D move · Q E turn (or mouse) · three rooms to explore · shoot a screen to watch it';
     document.body.appendChild(hint);
 
     ['pointerdown', 'keydown'].forEach(function (ev) {

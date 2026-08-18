@@ -47,3 +47,27 @@ Outputs:
 - The search signature must span more than one texture column. One column is
   byte-identical to a run inside the raw lump (which is also in the heap), and
   matching that instead corrupts memory.
+
+## Map layout
+
+Three octagonal rooms in a triangle: a main room with a hallway branching to
+each of the other two. Every floor and ceiling is at the same height, so the
+whole complex is a **single sector** whose boundary is one closed loop -- walk
+the main room clockwise and, at each doorway, detour out along the hallway,
+around the branch room, and back. Every linedef stays one-sided and there are
+no two-sided lines to get wrong.
+
+Screens: 6 in the main room (two of its eight walls are doorways) and 7 in each
+branch room = 20. `public/videos.json` maps one Wistia hashed-ID per screen in
+`WISTSC00..WISTSC19` order.
+
+## bsp.py
+
+The single-room map shipped **zero** BSP nodes, which prboom reads as "one
+subsector, draw everything" (`src/r_main.c:466`). That is only correct while
+the map is convex. Three rooms joined by hallways are not, so `bsp.py` builds a
+real tree: pick a partition, split straddling segs, recurse, and emit nodes
+post-order so the root lands last (the renderer starts at `numnodes-1`).
+
+It is validated to leave convex shapes alone -- a square or a lone octagon
+still produces 0 nodes and 1 subsector, exactly matching the old output.

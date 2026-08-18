@@ -1,29 +1,52 @@
 {
-  "_comment": [
-    "One Wistia media hashed-ID per octagon wall, in order (WISTSCR0..WISTSCR7),",
-    "running clockwise from the wall on your right at spawn.",
-    "These are the first eight media from the 'Lenny Folder'.",
-    "The page resolves each ID to a CORS-enabled MP4 at runtime via",
-    "https://fast.wistia.net/embed/medias/<id>.json, so only IDs are needed here."
-  ],
-  "screens": [
-    "9pyv4cqb5n",
-    "suqslabhwy",
-    "s8ixinjnuo",
-    "fh2cihsohr",
-    "q5zrl1zkz0",
-    "uvftwxg5re",
-    "aol2awx2la",
-    "urn2tw6kf8"
-  ],
-  "_titles": [
-    "Lenny - A Better Way to Deliver Video",
-    "Lenny's Halloween Costume",
-    "MGM Lion - Lenny",
-    "Drag and Drop - Lenny",
-    "How to Order Treats Online With Lenny",
-    "Lenny on a Billboard - Route 93",
-    "Lenny Truck Team Reveal",
-    "Lenny Truck Backup"
-  ]
+ "_comment": [
+  "One Wistia media hashed-ID per screen, in WISTSC00..WISTSC19 order.",
+  "Screens 00-05 are the main room, 06-12 the NW room, 13-19 the NE room.",
+  "Each ID is resolved to a CORS-enabled MP4 at runtime via",
+  "https://fast.wistia.net/embed/medias/<id>.json -- IDs only, no URLs to rot."
+ ],
+ "screens": [
+  "9pyv4cqb5n",
+  "suqslabhwy",
+  "s8ixinjnuo",
+  "fh2cihsohr",
+  "q5zrl1zkz0",
+  "uvftwxg5re",
+  "aol2awx2la",
+  "urn2tw6kf8",
+  "xbfa8a3odq",
+  "mw3uepskxr",
+  "y569j6azc7",
+  "h73ml4uusu",
+  "qgqz53i7ic",
+  "ggmqg6642k",
+  "qpmjckazjc",
+  "jwj8v1qs5v",
+  "h0efjem2cp",
+  "86l1rkh8ao",
+  "e3mg8p8hp6",
+  "05kbd51lzc"
+ ],
+ "_titles": [
+  "Lenny - A Better Way to Deliver Video",
+  "Lenny's Halloween Costume",
+  "MGM Lion - Lenny",
+  "Drag and Drop - Lenny",
+  "How to Order Treats Online With Lenny",
+  "Lenny on a Billboard - Route 93",
+  "Lenny Truck Team Reveal",
+  "Lenny Truck Backup",
+  "What Will Lenny Choose - 800mm Lens",
+  "What Will Lenny Choose - Drone",
+  "What Will Lenny Choose - 50mm STM",
+  "What Will Lenny Choose - Theta S",
+  "Lenny Watching Noodle on Lenny",
+  "Meet Lenny - #StartPup",
+  "Tips and Tricks Intro",
+  "The Lenny Pumpkin",
+  "Chris filming Lenny trying to yawn",
+  "Snow Lenny",
+  "Lenny 4K - C300 Mark II",
+  "RED - Lenny test footage (obviously)"
+ ]
 }

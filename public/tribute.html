@@ -85,6 +85,10 @@
         monitorRunDependencies: function () {}
       };
     </script>
-    <script type="text/javascript" src="./doom1.js"></script>
+    <!-- tribute-engine.js is doom1.js with the file-package manifest rewritten
+         to point at tribute.data: the same engine, but without the 90MB of
+         music the engine cannot load anyway. Regenerate with
+         `python3 tools/repack_data.py`. -->
+    <script type="text/javascript" src="./tribute-engine.js"></script>
   </body>
 </html>

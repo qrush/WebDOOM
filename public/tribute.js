@@ -19,7 +19,7 @@
  * heap and overwrite it with palette-quantised video every frame.
  */
 (function () {
-  var BUILD = 'rev20-rotate-acquire';
+  var BUILD = 'rev24-perf';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -173,17 +173,34 @@
     return x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3];
   }
 
-  /* The spawn triple matches a few places (the map's own spawn record among
-     them). The player's mobj is the one whose coordinates actually change. */
+  /* The spawn triple matches half a dozen places -- the map's own spawn
+     record among them. Identify the real mobj by its ANGLE: angle_t is a BAM
+     with the full circle at 2^32, so the spawn facing is an exact value none
+     of the decoys carry.
+
+     The previous approach waited for the coordinates to change, which meant
+     the player stayed unfound until they happened to walk -- so proximity
+     audio was silent and aiming fell back to screen 0 for anyone who shot
+     before moving. Movement is still used as a fallback. */
   function resolvePlayer() {
     if (playerAddr >= 0) return true;
     if (!playerCandidates || !playerCandidates.length) return false;
     if (!refreshViews()) return false;
+
+    var wantAngle = meta.player.spawnAngle >>> 0;
     for (var k = 0; k < playerCandidates.length; k++) {
       var a = playerCandidates[k] >> 2;
-      var x = i32[a], y = i32[a + 1];
-      if ((x !== playerSeen[k][0] || y !== playerSeen[k][1]) && inBounds(x, y)) {
+      if ((i32[a + ANGLE_WORD_OFFSET] >>> 0) === wantAngle && inBounds(i32[a], i32[a + 1])) {
         playerAddr = playerCandidates[k];
+        return true;
+      }
+    }
+    // fallback: whichever candidate actually moves is the live mobj
+    for (var m = 0; m < playerCandidates.length; m++) {
+      var b = playerCandidates[m] >> 2;
+      if ((i32[b] !== playerSeen[m][0] || i32[b + 1] !== playerSeen[m][1]) &&
+          inBounds(i32[b], i32[b + 1])) {
+        playerAddr = playerCandidates[m];
         return true;
       }
     }
@@ -233,7 +250,8 @@
 
   /* ---------------------------- proximity audio --------------------------- */
 
-  var NEAR = 200, FAR = 620;      // map units: full volume -> silence
+  var NEAR = 150, FAR = 430;      // map units: full volume -> silence
+                                  // (scaled to the tighter 320-unit walls)
   var audioArmed = false;
 
   function armAudio() {
@@ -261,7 +279,10 @@
 
   // Quantising all eight screens every frame is far too much work, so the two
   // nearest are refreshed every frame and the rest round-robin behind them.
-  var HOT = 2, WARM = 2, rr = 0;
+  // Quantising a screen is 36864 palette lookups; doing four a frame on top of
+  // a software renderer at 540p is too much. The one you are looking at needs
+  // to be smooth, the rest can lag a little.
+  var HOT = 1, WARM = 1, rr = 0;
 
   function blit(sc) {
     var v = sc.video;
@@ -300,6 +321,19 @@
   function acquire() {
     if (frames % ACQUIRE_EVERY !== 0) return;
     var t0 = performance.now();
+
+    /* Interleave the player search with the screen searches. Previously the
+       player was only looked for once EVERY screen had been located, but a
+       screen the player has never faced has no composite in memory at all, so
+       that never happened -- the player stayed unlocated, proximity audio
+       stayed silent, and "which screen am I facing" always fell back to
+       screen 0. The player key is a single very selective int32, so alternating
+       costs almost nothing. */
+    if (playerAddr < 0 && (frames / ACQUIRE_EVERY) % 2 === 0) {
+      if (!resolvePlayer()) scanPlayerChunk();
+      scanCost = performance.now() - t0;
+      return;
+    }
 
     /* Rotate through the unlocated screens instead of always retrying the
        first one. DOOM builds a wall texture's composite lazily, the first time
@@ -364,30 +398,35 @@
     return best;
   }
 
-  /* The screen the player is actually LOOKING at, which is what the overlay
-     should open -- "nearest" is wrong in an octagon, where the wall behind you
-     is often closer than the one filling your view. Picks the smallest angular
-     offset from the view direction, using distance only to break ties, and
-     falls back to nearest if nothing is within roughly the field of view. */
-  function facingScreen() {
+  /* Which wall the player's crosshair is actually pointed at.
+     Rather than comparing bearings (which happily "picks" a screen even when
+     you are aiming at the plain wall beside it), cast the aim ray against the
+     real wall segments from the WAD and see what it hits. The room is convex,
+     so the ray crosses exactly one segment and there is no occlusion.
+     Returns the screen for that wall, or null when a plain wall was hit. */
+  function aimedScreen() {
     var p = playerPos(), a = playerAngle();
-    if (!p || a === null) return nearestScreen();
-    var best = null, bestOff = Infinity;
-    for (var i = 0; i < screens.length; i++) {
-      var c = screens[i].def.centre;
-      var bearing = Math.atan2(c[1] - p[1], c[0] - p[0]);
-      var d = Math.abs(((bearing - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-      if (d < bestOff - 0.01 ||
-          (Math.abs(d - bestOff) <= 0.01 && best && screens[i].dist < best.dist)) {
-        bestOff = d; best = screens[i];
-      }
+    if (!p || a === null) return null;
+    var dx = Math.cos(a), dy = Math.sin(a);
+    var walls = meta.walls, bestT = Infinity, hit = null;
+
+    for (var i = 0; i < walls.length; i++) {
+      var w = walls[i];
+      var sx = w.b[0] - w.a[0], sy = w.b[1] - w.a[1];
+      var den = dx * sy - dy * sx;
+      if (Math.abs(den) < 1e-9) continue;                  // parallel
+      var ox = w.a[0] - p[0], oy = w.a[1] - p[1];
+      var t = (ox * sy - oy * sx) / den;                   // along the aim ray
+      var u = (ox * dy - oy * dx) / den;                   // along the segment
+      if (t > 0 && u >= 0 && u <= 1 && t < bestT) { bestT = t; hit = w; }
     }
-    return (best && bestOff < Math.PI / 2) ? best : nearestScreen();
+    if (!hit || hit.screen === null || hit.screen === undefined) return null;
+    return screens[hit.screen] || null;
   }
 
-  function openOverlay() {
+  function openOverlay(forced) {
     if (overlay) return;
-    var sc = facingScreen();
+    var sc = forced || aimedScreen() || nearestScreen();
     if (!sc || !sc.id) return;
     overlay = document.createElement('div');
     overlay.id = 'tribute-overlay';
@@ -513,19 +552,28 @@
 
     var hint = document.createElement('div');
     hint.id = 'tribute-hint';
-    hint.textContent = 'W A S D move · Q E turn (or mouse) · walk up to a screen to hear it · V to watch the one you are facing';
+    hint.textContent = 'W A S D move · Q E turn (or mouse) · walk closer to hear a screen · shoot a screen to watch it full quality';
     document.body.appendChild(hint);
 
     ['pointerdown', 'keydown'].forEach(function (ev) {
       document.addEventListener(ev, function () { armAudio(); }, { once: true });
     });
 
-    // NOTE: 'E' is bound to turn-right in this build (src/m_misc.c:414), and
-    // 'Q' to turn-left, so the overlay hotkey must avoid both.
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && overlay) { closeOverlay(); return; }
-      if (!overlay && (e.key === 'v' || e.key === 'V')) openOverlay();
+      if (e.key === 'Escape' && overlay) closeOverlay();
     });
+
+    /* Shooting a screen opens it. Fire is the LEFT MOUSE BUTTON in this build
+       -- the Ctrl binding is commented out (src/m_misc.c:444) and mouseb_fire
+       defaults to 0 (:389). We only open when the aim ray actually lands on a
+       screen wall, so shooting the plain walls does nothing. */
+    if (Module && Module.canvas) {
+      Module.canvas.addEventListener('mousedown', function (e) {
+        if (e.button !== 0 || overlay) return;
+        var sc = aimedScreen();
+        if (sc) openOverlay(sc);
+      });
+    }
 
     if (Module && Module.canvas) {
       Module.canvas.addEventListener('click', function () {
@@ -542,7 +590,7 @@
     }); },
     player: playerPos,
     angle: playerAngle,
-    facing: function () { var f = facingScreen(); return f && f.def.name; },
+    aimed: function () { var f = aimedScreen(); return f && f.def.name; },
     open: openOverlay
   };
 })();

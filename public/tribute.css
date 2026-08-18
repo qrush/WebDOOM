@@ -63,3 +63,19 @@ html, body {
   font-size: 17px; line-height: 1; cursor: pointer;
 }
 #tribute-overlay .to-close:hover { background: rgba(255,255,255,.2); }
+
+/* multi-screen chrome */
+#tribute-bar { gap: 8px; padding: 6px 6px 6px 14px; }
+#tribute-bar button {
+  border: 0; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  font-size: 12px; font-weight: 600; padding: 7px 12px;
+  background: #2a2a33; color: #d8d8dc;
+}
+#tribute-bar button:hover { background: #3a3a46; }
+#tribute-bar #tribute-watch { background: #00cc00; color: #06210a; font-weight: 650; }
+#tribute-bar #tribute-watch:hover { background: #21e021; }
+#tribute-bar #tribute-sound.on { background: #185018; color: #baf7ba; }
+#tribute-hint { font-size: 11.5px; letter-spacing: .01em; }
+#tribute-overlay .to-caption {
+  margin-top: 10px; text-align: center; color: #b9bfcc; font-size: 13px;
+}

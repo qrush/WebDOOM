@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "One Wistia media hashed-ID per octagon wall, in order (WISTSCR0..WISTSCR7).",
+    "WISTSCR0 is the NE wall; they run counter-clockwise from there.",
+    "The page resolves each ID to a CORS-enabled MP4 at runtime via",
+    "https://fast.wistia.net/embed/medias/<id>.json -- so only IDs are needed.",
+    "TODO: these are all placeholders pointing at the same video; replace with",
+    "the eight IDs from the tribute folder."
+  ],
+  "screens": [
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n",
+    "9pyv4cqb5n"
+  ]
+}

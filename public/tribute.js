@@ -1,229 +1,188 @@
 'use strict';
 /*
- * WebDOOM 10-year tribute -- in-world video wall.
+ * WebDOOM 10-year tribute -- an octagonal room with a Wistia video on each of
+ * its eight walls, plus proximity audio and a full-quality overlay player.
  *
- * WHY NOT WebGL: this prebuilt engine runs prboom's SOFTWARE renderer.
- * src/m_misc.c:308-313 defaults `videomode` to "8" on every non-MSVC build,
- * so no WebGL context is ever created and there is no GL texture to stream
- * into. Forcing `-vidmode gl` does reach the GL path (after patching a
- * startup crash and a throwing glTexGenfv stub), but emscripten's legacy GL
- * emulation then renders an all-black frame -- unusable.
+ * WHY THIS WRITES INTO WASM MEMORY:
+ * The prebuilt engine runs prboom's SOFTWARE renderer. src/m_misc.c:308-313
+ * defaults `videomode` to "8" on every non-MSVC build, so no WebGL context is
+ * ever created and there is no GL texture to stream into. (Forcing
+ * `-vidmode gl` does reach the GL renderer after patching a startup crash and
+ * a throwing glTexGenfv stub -- see make-gl-build.py -- but emscripten's
+ * legacy GL emulation then renders an all-black frame.)
  *
- * SO: we write straight into the software renderer's texture memory.
- * src/r_segs.c:352 draws walls from R_CacheTextureCompositePatchNum(), whose
- * rpatch_t.pixels is one flat COLUMN-major byte array -- pixels[x*height + y]
- * (src/r_patch.c:277). Our WISTSCRN texture is a single fully-opaque patch,
- * so prboom composites it verbatim; we locate that buffer in the wasm heap by
- * searching for a slice of the known static pattern, then overwrite it with
- * palette-quantised video frames every animation frame.
+ * So: walls are drawn from R_CacheTextureCompositePatchNum (src/r_segs.c:352),
+ * whose rpatch_t.pixels is one flat COLUMN-major byte array --
+ * pixels[x*height + y] (src/r_patch.c:277). Each WISTSCR* texture is a single
+ * fully-opaque patch of deterministic static, so prboom composites it verbatim
+ * and its exact bytes are known ahead of time. We find each composite in the
+ * heap and overwrite it with palette-quantised video every frame.
  */
 (function () {
-  var BUILD = 'rev11-proximity-audio';
+  var BUILD = 'rev18-word-scan+fallback';
 
-  var VIDEO_MP4 = 'https://embed-ssl.wistia.com/deliveries/cc9c2606f69a9f7c4bcf003efafdbbd1f619e57e.bin';
-  var WISTIA_ID = '9pyv4cqb5n';
+  var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
-  var meta = null, lut = null, expected = null;  // screen.json, palette.lut, screen.bin
-  var heap = null;                      // Module.HEAPU8
-  var addr = -1;                        // composite buffer address
-  var video = null, streaming = false;
-  var lastWrite = null;                 // copy of what we wrote, for validation
-  var frames = 0, rescans = 0, scanMs = 0, matches = 0;
+  var meta = null, lut = null, expected = null, videoIds = null;
+  var heap = null, i32 = null;
+  var screens = [];                 // {def, addr, video, buf, canvas, ctx, dist}
+  var started = false;
+  var frames = 0;
 
-  var srcCanvas = document.createElement('canvas');
-  var sctx = null;
-
-  /* ---------------- locating the texture in the wasm heap ---------------- */
-
-  /* Scanning the whole 256MB heap in one go takes long enough to starve the
-     game's requestAnimationFrame loop (the engine visibly stalls mid-wipe), so
-     the search is chunked across ticks and resumes where it left off.
-
-     A candidate is confirmed by comparing ALL 32768 bytes against the expected
-     composite (screen.bin) rather than trusting the short signature. That
-     matters because the raw WISTSCRN lump is resident in the heap too and a
-     single column of it is byte-identical to a column of the composite; only
-     the full-buffer check reliably tells them apart. */
-  var CHUNK = 24 << 20;        // bytes scanned per tick
-  var cursor = 0;
-
-  function verifyAt(h, at) {
-    if (at < 0 || at + expected.length > h.length) return false;
-    for (var i = 0; i < expected.length; i++) {
-      if (h[at + i] !== expected[i]) return false;
-    }
-    return true;
-  }
-
-  /* Uses the native TypedArray indexOf to find candidate first-bytes instead
-     of a hand-rolled JS byte loop -- the naive version burned enough main
-     thread time to visibly stall the engine's main loop during the title
-     wipe. Only positions whose first byte matches get the (rare) full check. */
-  function scanChunk() {
-    if (!window.Module || !Module.HEAPU8) return false;
-    heap = Module.HEAPU8;      // the view is replaced whenever memory grows
-
-    var sig = meta.signature, n = sig.length, first = sig[0];
-    var end = Math.min(cursor + CHUNK, heap.length - n);
-    var t0 = performance.now();
-
-    var i = heap.indexOf(first, cursor);
-    while (i >= 0 && i < end) {
-      var ok = true;
-      for (var j = 1; j < n; j++) {
-        if (heap[i + j] !== sig[j]) { ok = false; break; }
-      }
-      if (ok && verifyAt(heap, i)) {
-        addr = i;
-        rescans++;
-        scanMs = Math.round(performance.now() - t0);
-        return true;
-      }
-      i = heap.indexOf(first, i + 1);
-    }
-
-    scanMs = Math.round(performance.now() - t0);
-    cursor = (end >= heap.length - n) ? 0 : end;
-    return false;
-  }
-
-  /* full re-acquire, used when a known-good address goes stale */
-  function locate() {
-    cursor = 0;
-    for (var pass = 0; pass < 64; pass++) {
-      if (scanChunk()) return true;
-      if (cursor === 0) break;         // wrapped without finding it
-    }
-    return false;
-  }
-
-  /* the buffer is PU_CACHE and could in principle be purged/moved. Writing to
-     a stale address would corrupt unrelated memory, so before every frame we
-     confirm the bytes are still the ones we last wrote. */
-  function addrStillValid() {
-    if (addr < 0 || !lastWrite) return false;
-    if (Module.HEAPU8 !== heap) heap = Module.HEAPU8;
-    if (addr + meta.bufferLength > heap.length) return false;
-    for (var k = 0; k < 64; k++) {
-      var off = (k * 977) % meta.bufferLength;   // scattered spot-check
-      if (heap[addr + off] !== lastWrite[off]) return false;
-    }
-    return true;
-  }
-
-  /* --------------------------- video streaming --------------------------- */
-
-  function ensureVideo(cb) {
-    if (video) return cb();
-    video = document.createElement('video');
-    video.crossOrigin = 'anonymous';
-    video.loop = true; video.muted = true; video.playsInline = true;
-    video.preload = 'auto'; video.src = VIDEO_MP4;
-    video.addEventListener('canplay', function once () {
-      video.removeEventListener('canplay', once); cb();
-    });
-    video.addEventListener('error', function () { setStatus('video failed to load', true); });
-    video.load();
-  }
-
-  function start() {
-    if (streaming) return;
-    ensureVideo(function () {
-      srcCanvas.width = meta.width; srcCanvas.height = meta.height;
-      sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
-      lastWrite = new Uint8Array(meta.bufferLength);
-      video.play().catch(function () {});
-      streaming = true;
-      pump();
-    });
-  }
-
-  function pump() {
-    if (!streaming) return;
-    requestAnimationFrame(pump);
-    if (!video || video.readyState < 2 || !video.videoWidth) return;
-
-    // never write to a stale address -- drop back to chunked searching instead
-    // of doing a blocking full rescan inside the render loop
-    if (!addrStillValid()) {
-      if (!verifyAt(heap, addr) && !scanChunk()) { return; }
-    }
-
-    var W = meta.width, H = meta.height;
-    // cover-fit the 16:9 frame into the 2:1 screen
-    var s = Math.max(W / video.videoWidth, H / video.videoHeight);
-    var dw = video.videoWidth * s, dh = video.videoHeight * s;
-    sctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
-
-    var img = sctx.getImageData(0, 0, W, H).data;
-    var buf = lastWrite;
-    // RGB -> RGB555 -> palette index, written COLUMN-major
-    for (var y = 0; y < H; y++) {
-      var row = y * W * 4;
-      for (var x = 0; x < W; x++) {
-        var p = row + x * 4;
-        buf[x * H + y] = lut[((img[p] >> 3) << 10) | ((img[p + 1] >> 3) << 5) | (img[p + 2] >> 3)];
-      }
-    }
-    heap.set(buf, addr);
-    frames++;
-    updateAudio();
-    if ((frames & 31) === 0) renderDebug();
-  }
-
-  /* --------------------------- proximity audio ---------------------------
-     DOOM keeps the player's position in its mobj_t as three consecutive
-     fixed_t (16.16) values -- x, y, z. We find that struct the same way we
-     found the texture: scan for the known spawn triple at map start, which is
-     why the spawn coordinates in the WAD are deliberately odd numbers.
-
-     Candidates are disambiguated by movement: the real mobj's coordinates
-     change when the player walks, while an incidental byte match (or the
-     map's spawn-point record) stays put. Until exactly one candidate has been
-     seen to move AND stays inside the room, we don't trust any of them.       */
-
-  var playerAddr = -1, playerCandidates = [], playerSeen = null;
-  var i32 = null;                      // Int32Array view over the same buffer
-  var NEAR = 160, FAR = 560;           // map units: full volume -> silence
-  var audioArmed = false, wallGain = 0;
+  /* ---------------------------- heap plumbing ---------------------------- */
 
   function refreshViews() {
-    if (!Module.HEAPU8) return false;
-    if (heap !== Module.HEAPU8) heap = Module.HEAPU8;
+    if (!window.Module || !Module.HEAPU8) return false;
+    if (heap !== Module.HEAPU8) { heap = Module.HEAPU8; i32 = null; }
     if (!i32 || i32.buffer !== heap.buffer) i32 = new Int32Array(heap.buffer);
     return true;
   }
 
-  function findPlayerCandidates() {
-    if (!refreshViews()) return;
-    var sp = meta.player.spawn;                       // [x, y, z] fixed_t
-    var key = new Uint8Array(new Int32Array(sp).buffer);
-    var first = key[0], n = key.length, hits = [];
+  /* Confirm a candidate byte-for-byte against the expected composite rather
+     than trusting the signature. The raw WISTSCR* lumps are resident in the
+     heap too, and one texture column of a lump is byte-identical to a column
+     of its composite -- only the full check reliably tells them apart. */
+  function verifyAt(at, off, len) {
+    if (at < 0 || at + len > heap.length) return false;
+    for (var i = 0; i < len; i++) {
+      if (heap[at + i] !== expected[off + i]) return false;
+    }
+    return true;
+  }
+
+  /* Chunked, because scanning 256MB in one go starves the engine's main loop
+     (it visibly stalls mid-wipe). Uses the native typed-array indexOf for the
+     first-byte search; only those positions get the full comparison. */
+  /* Search 32-BIT WORDS, not bytes.
+     A byte anchor is hopeless here: every candidate value occurs roughly once
+     every 256 bytes, so a 256MB sweep runs ~1M inner checks and takes tens of
+     seconds per screen. (Anchoring on the first byte is worse still -- DOOM
+     positions are fixed_t, so the player key starts 00 00 ..., which matches
+     hundreds of millions of times in a mostly-zero heap and locks the page up
+     hard enough that devtools times out.)
+
+     A specific 32-bit word occurs by chance about once per 4 billion, so
+     Int32Array.indexOf lands on the real thing almost immediately. Zone blocks
+     are at least 4-byte aligned so the composites are word-aligned; a byte
+     fallback covers the case where they somehow are not. */
+  var CHUNK_WORDS = 8 << 20;          // 32MB of heap per pass
+  var ACQUIRE_EVERY = 2;
+  var scanCost = 0;
+
+  function word0(bytes) {
+    return ((bytes[3] << 24) | (bytes[2] << 16) | (bytes[1] << 8) | bytes[0]) | 0;
+  }
+
+  function matchesSig(at, sig) {
+    for (var j = 0; j < sig.length; j++) {
+      if (heap[at + j] !== sig[j]) return false;
+    }
+    return true;
+  }
+
+  function scanFor(sc) {
+    if (!refreshViews()) return false;
+    var sig = sc.def.signature;
+    if (sc.word === undefined) sc.word = word0(sig);
+    var end = Math.min(sc.cursor + CHUNK_WORDS, i32.length);
+    var i = i32.indexOf(sc.word, sc.cursor);
+    while (i >= 0 && i < end) {
+      var at = i * 4;
+      if (matchesSig(at, sig) && verifyAt(at, sc.def.offset, sc.def.bufferLength)) {
+        sc.addr = at;
+        return true;
+      }
+      i = i32.indexOf(sc.word, i + 1);
+    }
+    if (end >= i32.length) {
+      sc.cursor = 0;
+      // Word scanning assumes the composite is 4-byte aligned, which zone
+      // blocks always are in practice. If a whole pass finds nothing, fall
+      // back to an unaligned byte search once before giving up on this sweep.
+      if (!sc.triedBytes) { sc.triedBytes = true; return scanForBytes(sc); }
+      sc.triedBytes = false;
+    } else {
+      sc.cursor = end;
+    }
+    return false;
+  }
+
+  function scanForBytes(sc) {
+    var sig = sc.def.signature, first = sig[0];
     var i = heap.indexOf(first);
-    while (i >= 0 && hits.length < 32) {
-      var ok = (i % 4) === 0;                          // int32-aligned
-      for (var j = 1; ok && j < n; j++) if (heap[i + j] !== key[j]) ok = false;
-      if (ok) hits.push(i);
+    while (i >= 0) {
+      if (matchesSig(i, sig) && verifyAt(i, sc.def.offset, sc.def.bufferLength)) {
+        sc.addr = i;
+        return true;
+      }
       i = heap.indexOf(first, i + 1);
     }
-    playerCandidates = hits;
-    playerSeen = hits.map(function (a) { return [i32[a >> 2], i32[(a >> 2) + 1]]; });
+    return false;
+  }
+
+  /* cheap per-frame guard so we never write to an address that moved */
+  function stillValid(sc) {
+    if (sc.addr < 0 || !sc.wrote) return false;
+    if (!refreshViews()) return false;
+    if (sc.addr + sc.def.bufferLength > heap.length) return false;
+    for (var k = 0; k < 32; k++) {
+      var off = (k * 1103) % sc.def.bufferLength;
+      if (heap[sc.addr + off] !== sc.buf[off]) return false;
+    }
+    return true;
+  }
+
+  /* --------------------------- player position --------------------------- */
+
+  var playerAddr = -1, playerCandidates = null, playerSeen = null;
+  var playerCursor = 0, playerHits = [];
+
+  /* Chunked like the texture search, and for the same reason: before the map
+     exists the spawn triple simply isn't in memory, so an unthrottled search
+     would run a full 256MB pass EVERY frame and starve the engine's main loop
+     (the title-screen wipe visibly freezes). One bounded chunk per frame. */
+  var playerKey = null, playerWord = 0;
+
+  function scanPlayerChunk() {
+    if (!refreshViews()) return;
+    if (!playerKey) {
+      playerKey = new Uint8Array(new Int32Array(meta.player.spawn).buffer);
+      playerWord = meta.player.spawn[0] | 0;      // the spawn x, as an int32
+    }
+    var end = Math.min(playerCursor + CHUNK_WORDS, i32.length);
+    var i = i32.indexOf(playerWord, playerCursor);
+    while (i >= 0 && i < end && playerHits.length < 64) {
+      var at = i * 4;
+      if (matchesSig(at, playerKey)) playerHits.push(at);
+      i = i32.indexOf(playerWord, i + 1);
+    }
+    if (end >= i32.length) {                      // finished a full pass
+      playerCursor = 0;
+      if (playerHits.length) {
+        playerCandidates = playerHits;
+        playerSeen = playerHits.map(function (a) { return [i32[a >> 2], i32[(a >> 2) + 1]]; });
+      }
+      playerHits = [];
+    } else {
+      playerCursor = end;
+    }
   }
 
   function inBounds(x, y) {
-    var b = meta.player.bounds;                        // [minX, minY, maxX, maxY]
+    var b = meta.player.bounds;
     return x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3];
   }
 
+  /* The spawn triple matches a few places (the map's own spawn record among
+     them). The player's mobj is the one whose coordinates actually change. */
   function resolvePlayer() {
     if (playerAddr >= 0) return true;
-    if (!playerCandidates.length) { findPlayerCandidates(); return false; }
+    if (!playerCandidates || !playerCandidates.length) return false;
     if (!refreshViews()) return false;
     for (var k = 0; k < playerCandidates.length; k++) {
       var a = playerCandidates[k] >> 2;
       var x = i32[a], y = i32[a + 1];
-      var was = playerSeen[k];
-      if ((x !== was[0] || y !== was[1]) && inBounds(x, y)) {
+      if ((x !== playerSeen[k][0] || y !== playerSeen[k][1]) && inBounds(x, y)) {
         playerAddr = playerCandidates[k];
         return true;
       }
@@ -234,43 +193,160 @@
   function playerPos() {
     if (playerAddr < 0 || !refreshViews()) return null;
     var a = playerAddr >> 2;
-    var x = i32[a] / 65536, y = i32[a + 1] / 65536;
-    if (!inBounds(i32[a], i32[a + 1])) { playerAddr = -1; return null; }  // lost it
-    return [x, y];
+    if (!inBounds(i32[a], i32[a + 1])) { playerAddr = -1; playerCandidates = null; return null; }
+    return [i32[a] / 65536, i32[a + 1] / 65536];
   }
 
-  /* volume falls off with distance to the centre of the screen wall */
-  function updateAudio() {
-    if (!video) return;
-    if (overlay) { video.volume = 0; return; }          // overlay owns the audio
-    var p = playerPos();
-    if (!p) { resolvePlayer(); video.volume = 0; return; }
-    var cx = meta.screenCentre[0], cy = meta.screenCentre[1];
-    var d = Math.hypot(p[0] - cx, p[1] - cy);
-    var t = (FAR - d) / (FAR - NEAR);
-    wallGain = Math.max(0, Math.min(1, t));
-    wallGain = wallGain * wallGain;                     // gentler far-field falloff
-    video.volume = audioArmed ? wallGain : 0;
-    if (audioArmed && video.muted) video.muted = false;
+  /* ------------------------------- video --------------------------------- */
+
+  function resolveMp4(id) {
+    return fetch(MEDIA_JSON + id + '.json')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var assets = j.media.assets.filter(function (a) { return a.container === 'mp4'; });
+        assets.sort(function (a, b) { return (a.width || 0) - (b.width || 0); });
+        // smallest mp4 is plenty for a 256x144 wall and cheapest to decode
+        return { url: assets[0].url, name: j.media.name };
+      });
   }
 
-  /* browsers only allow unmuted playback after a real user gesture */
+  function makeVideo(url) {
+    var v = document.createElement('video');
+    v.crossOrigin = 'anonymous';
+    v.loop = true; v.muted = true; v.playsInline = true;
+    v.preload = 'auto'; v.src = url;
+    v.load();
+    return v;
+  }
+
+  /* ---------------------------- proximity audio --------------------------- */
+
+  var NEAR = 200, FAR = 620;      // map units: full volume -> silence
+  var audioArmed = false;
+
   function armAudio() {
-    if (audioArmed || !video) return;
+    if (audioArmed) return;
     audioArmed = true;
-    video.muted = false;
-    video.volume = 0;
-    video.play().catch(function () {});
+    screens.forEach(function (sc) {
+      if (sc.video) { sc.video.muted = false; sc.video.volume = 0; sc.video.play().catch(function () {}); }
+    });
     var b = document.getElementById('tribute-sound');
-    if (b) b.textContent = '🔊 sound on';
+    if (b) { b.textContent = '🔊 sound on'; b.classList.add('on'); }
+  }
+
+  function updateAudio(p) {
+    for (var i = 0; i < screens.length; i++) {
+      var sc = screens[i];
+      if (!sc.video) continue;
+      if (overlay || !audioArmed || !p) { sc.video.volume = 0; continue; }
+      var t = (FAR - sc.dist) / (FAR - NEAR);
+      var g = Math.max(0, Math.min(1, t));
+      sc.video.volume = g * g;          // gentler far-field falloff
+    }
+  }
+
+  /* ------------------------------ main loop ------------------------------ */
+
+  // Quantising all eight screens every frame is far too much work, so the two
+  // nearest are refreshed every frame and the rest round-robin behind them.
+  var HOT = 2, WARM = 2, rr = 0;
+
+  function blit(sc) {
+    var v = sc.video;
+    if (!v || v.readyState < 2 || !v.videoWidth) return;
+    // acquisition happens in acquire(); here we only guard against a moved buffer
+    if (!stillValid(sc) && !verifyAt(sc.addr, sc.def.offset, sc.def.bufferLength)) {
+      sc.addr = -1; sc.wrote = false; return;
+    }
+    var W = sc.def.width, H = sc.def.height;
+    var s = Math.max(W / v.videoWidth, H / v.videoHeight);
+    var dw = v.videoWidth * s, dh = v.videoHeight * s;
+    sc.ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+
+    var img = sc.ctx.getImageData(0, 0, W, H).data;
+    var buf = sc.buf;
+    for (var y = 0; y < H; y++) {
+      var row = y * W * 4;
+      for (var x = 0; x < W; x++) {
+        var p = row + x * 4;
+        buf[x * H + y] = lut[((img[p] >> 3) << 10) | ((img[p + 1] >> 3) << 5) | (img[p + 2] >> 3)];
+      }
+    }
+    heap.set(buf, sc.addr);
+    sc.wrote = true;
+  }
+
+  /* At most ONE bounded scan per frame across the whole app, so acquisition
+     never competes with the engine for the main thread. */
+  /* All eight composites are allocated back-to-back when the level loads, so
+     once one is found the rest are almost certainly a short way either side of
+     it. Starting the next search just below the last hit turns a ~256MB sweep
+     per screen into a near-instant one; the cursor still wraps for a full
+     sweep if the guess is wrong. */
+  var lastFound = -1;
+
+  function acquire() {
+    if (frames % ACQUIRE_EVERY !== 0) return;
+    var t0 = performance.now();
+    for (var i = 0; i < screens.length; i++) {
+      var sc = screens[i];
+      if (sc.addr >= 0) continue;
+      if (!sc.primed && lastFound >= 0) {
+        sc.cursor = Math.max(0, (lastFound >> 2) - (512 << 10));
+        sc.primed = true;
+      }
+      if (scanFor(sc)) lastFound = sc.addr;
+      scanCost = performance.now() - t0;
+      return;
+    }
+    if (playerAddr < 0 && !resolvePlayer()) scanPlayerChunk();
+    scanCost = performance.now() - t0;
+  }
+
+  function pump() {
+    requestAnimationFrame(pump);
+    if (!started || !refreshViews()) return;
+
+    acquire();
+
+    var p = playerPos();
+
+    for (var i = 0; i < screens.length; i++) {
+      var c = screens[i].def.centre;
+      screens[i].dist = p ? Math.hypot(p[0] - c[0], p[1] - c[1]) : 1e9;
+    }
+    var order = screens.slice().sort(function (a, b) { return a.dist - b.dist; });
+
+    for (var h = 0; h < HOT && h < order.length; h++) {
+      if (order[h].addr >= 0) blit(order[h]);
+    }
+    for (var k = 0; k < WARM; k++) {
+      var sc = order[HOT + ((rr + k) % Math.max(1, order.length - HOT))];
+      if (sc && sc.addr >= 0) blit(sc);
+    }
+    rr += WARM;
+
+    updateAudio(p);
+    frames++;
+    if ((frames & 15) === 0) renderStatus();
   }
 
   /* ------------------------- full-quality overlay ------------------------- */
 
   var overlay = null;
 
+  function nearestScreen() {
+    var best = null;
+    for (var i = 0; i < screens.length; i++) {
+      if (!best || screens[i].dist < best.dist) best = screens[i];
+    }
+    return best;
+  }
+
   function openOverlay() {
-    if (overlay) { overlay.classList.add('open'); return; }
+    if (overlay) return;
+    var sc = nearestScreen();
+    if (!sc || !sc.id) return;
     overlay = document.createElement('div');
     overlay.id = 'tribute-overlay';
     overlay.innerHTML =
@@ -278,12 +354,13 @@
       '  <button class="to-close" title="close (Esc)">×</button>' +
       '  <div class="wistia_responsive_padding" style="padding:56.25% 0 0 0;position:relative;">' +
       '    <div class="wistia_responsive_wrapper" style="height:100%;left:0;position:absolute;top:0;width:100%;">' +
-      '      <iframe src="https://fast.wistia.net/embed/iframe/' + WISTIA_ID +
-                 '?web_component=true&seo=false&autoPlay=true" title="Lenny - A Better Way to Deliver Video" ' +
+      '      <iframe src="https://fast.wistia.net/embed/iframe/' + sc.id +
+                 '?web_component=true&seo=false&autoPlay=true" title="' + (sc.name || 'Wistia video') + '" ' +
                  'allow="autoplay; fullscreen" allowtransparency="true" frameborder="0" scrolling="no" ' +
                  'class="wistia_embed" name="wistia_embed" width="100%" height="100%"></iframe>' +
       '    </div>' +
       '  </div>' +
+      '  <div class="to-caption">' + (sc.name || '') + '</div>' +
       '</div>';
     document.body.appendChild(overlay);
     overlay.querySelector('.to-close').addEventListener('click', closeOverlay);
@@ -293,40 +370,35 @@
 
   function closeOverlay() {
     if (!overlay) return;
-    overlay.classList.remove('open');
-    // drop the iframe so its audio stops
-    var f = overlay.querySelector('iframe');
-    if (f) f.src = f.src;
     overlay.remove();
     overlay = null;
-    if (Module && Module.canvas) Module.canvas.focus();
+    focusGame();
   }
 
   /* ------------------------------- chrome -------------------------------- */
 
-  var hint, statusEl;
+  var statusEl;
 
-  function setStatus(msg, isErr) {
+  function renderStatus() {
     if (!statusEl) return;
-    statusEl.textContent = msg;
-    statusEl.className = isErr ? 'tribute-err' : '';
+    var located = screens.filter(function (s) { return s.addr >= 0; }).length;
+    var p = playerPos();
+    statusEl.textContent =
+      located + '/' + screens.length + ' screens · ' +
+      (p ? Math.round(nearestScreen().dist) + 'u away' : 'finding player') +
+      ' · ' + frames + 'f · scan ' + scanCost.toFixed(1) + 'ms';
   }
 
-  function renderDebug() {
-    if (!statusEl) return;
-    if (addr < 0) {
-      statusEl.textContent = matches > 1
-        ? 'ambiguous signature (' + matches + ' hits) — not writing'
-        : 'looking for the screen in memory…';
-      statusEl.className = matches > 1 ? 'tribute-err' : '';
-      return;
-    }
-    var p = playerPos();
-    statusEl.textContent = 'streaming · ' + frames + 'f' +
-      (p ? ' · ' + Math.round(Math.hypot(p[0] - meta.screenCentre[0], p[1] - meta.screenCentre[1])) + 'u'
-         : ' · finding player') +
-      ' · vol ' + Math.round((audioArmed ? wallGain : 0) * 100) + '%';
-    statusEl.className = '';
+  function focusGame() {
+    var c = Module && Module.canvas;
+    if (c) { c.setAttribute('tabindex', '0'); c.focus(); }
+  }
+
+  function goFullscreen() {
+    // emscripten's helper keeps the canvas aspect and grabs pointer lock
+    if (Module && typeof Module.requestFullscreen === 'function') Module.requestFullscreen(false, false);
+    else if (Module && Module.canvas && Module.canvas.requestFullscreen) Module.canvas.requestFullscreen();
+    focusGame();
   }
 
   /* --------------------------------- boot -------------------------------- */
@@ -334,23 +406,38 @@
   Promise.all([
     fetch('screen.json').then(function (r) { return r.json(); }),
     fetch('palette.lut').then(function (r) { return r.arrayBuffer(); }),
-    fetch('screen.bin').then(function (r) { return r.arrayBuffer(); })
+    fetch('screens.bin').then(function (r) { return r.arrayBuffer(); }),
+    fetch('videos.json').then(function (r) { return r.json(); })
   ]).then(function (res) {
     meta = res[0];
     lut = new Uint8Array(res[1]);
     expected = new Uint8Array(res[2]);
-    // the engine has to have loaded + composited the texture before we can
-    // find it, which only happens once the map is being drawn
-    var tries = 0;
-    var iv = setInterval(function () {
-      if (streaming) { clearInterval(iv); return; }
-      if (!window.Module || !Module.HEAPU8) return;
-      heap = Module.HEAPU8;
-      if (scanChunk()) { clearInterval(iv); setStatus('screen found'); start(); }
-      else { renderDebug(); if (++tries > 1200) { clearInterval(iv); setStatus('could not find the screen texture', true); } }
-    }, 250);
-  }).catch(function (e) {
-    setStatus('failed to load screen data: ' + e.message, true);
+    videoIds = res[3].screens;
+
+    screens = meta.screens.map(function (def, i) {
+      var cv = document.createElement('canvas');
+      cv.width = def.width; cv.height = def.height;
+      return {
+        def: def, addr: -1, cursor: 0, wrote: false, dist: 1e9,
+        buf: new Uint8Array(def.bufferLength),
+        canvas: cv, ctx: cv.getContext('2d', { willReadFrequently: true }),
+        video: null, id: videoIds[i] || null, name: null
+      };
+    });
+
+    // resolve every wall's MP4 (and title) in parallel
+    screens.forEach(function (sc) {
+      if (!sc.id) return;
+      resolveMp4(sc.id).then(function (r) {
+        sc.name = r.name;
+        sc.video = makeVideo(r.url);
+        if (audioArmed) { sc.video.muted = false; sc.video.volume = 0; }
+        sc.video.play().catch(function () {});
+      }).catch(function () { /* leave this wall as static */ });
+    });
+
+    started = true;
+    pump();
   });
 
   window.addEventListener('DOMContentLoaded', function () {
@@ -358,39 +445,41 @@
     bar.id = 'tribute-bar';
     bar.innerHTML = '<span id="tribute-status"></span>' +
                     '<button id="tribute-sound">🔇 enable sound</button>' +
-                    '<button id="tribute-watch">Watch the full video</button>';
+                    '<button id="tribute-full">Fullscreen</button>' +
+                    '<button id="tribute-watch">Watch full quality</button>';
     document.body.appendChild(bar);
     statusEl = bar.querySelector('#tribute-status');
-    bar.querySelector('#tribute-watch').addEventListener('click', function () {
-      openOverlay(); this.blur();
-    });
-    bar.querySelector('#tribute-sound').addEventListener('click', function () {
-      armAudio(); this.blur();
-    });
-    // any click or keypress in the game counts as the gesture that unlocks audio
+    bar.querySelector('#tribute-sound').addEventListener('click', function () { armAudio(); this.blur(); focusGame(); });
+    bar.querySelector('#tribute-full').addEventListener('click', function () { this.blur(); goFullscreen(); });
+    bar.querySelector('#tribute-watch').addEventListener('click', function () { this.blur(); openOverlay(); });
+
+    var hint = document.createElement('div');
+    hint.id = 'tribute-hint';
+    hint.textContent = 'W A S D move · Q E turn · walk up to a screen to hear it · V for full quality';
+    document.body.appendChild(hint);
+
     ['pointerdown', 'keydown'].forEach(function (ev) {
       document.addEventListener(ev, function () { armAudio(); }, { once: true });
     });
 
-    hint = document.createElement('div');
-    hint.id = 'tribute-hint';
-    hint.textContent = 'walk up to the screen to hear it · press E for full quality';
-    document.body.appendChild(hint);
-
+    // NOTE: 'E' is bound to turn-right in this build (src/m_misc.c:414), and
+    // 'Q' to turn-left, so the overlay hotkey must avoid both.
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && overlay) { closeOverlay(); return; }
-      if (!overlay && (e.key === 'e' || e.key === 'E')) openOverlay();
+      if (!overlay && (e.key === 'v' || e.key === 'V')) openOverlay();
     });
+
+    if (Module && Module.canvas) {
+      Module.canvas.addEventListener('click', focusGame);
+    }
   });
 
   window.__tribute = {
     build: BUILD,
-    addr: function () { return addr; },
-    frames: function () { return frames; },
-    relocate: locate,
-    open: openOverlay,
-    player: function () { return playerPos(); },
-    playerAddr: function () { return playerAddr; },
-    candidates: function () { return playerCandidates.slice(); }
+    screens: function () { return screens.map(function (s) {
+      return { name: s.def.name, addr: s.addr, dist: Math.round(s.dist), id: s.id, title: s.name };
+    }); },
+    player: playerPos,
+    open: openOverlay
   };
 })();

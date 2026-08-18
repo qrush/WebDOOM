@@ -32,7 +32,14 @@
         //   and a throwing glTexGenfv stub -- see make-gl-build.py), but
         //   emscripten's legacy GL emulation then renders an all-black frame,
         //   so GL is not a usable path in this prebuilt engine.
-        arguments: ['-file', 'tribute.wad'],
+        // -warp 1 1 boots straight into E1M1 (our octagon), skipping the
+        //   title screen, the attract-mode demos and the menus entirely.
+        //   That also sidesteps prboom's screen-melt (D_Wipe, src/d_main.c:172),
+        //   which runs its whole animation inside a single blocking main-loop
+        //   call and makes the page unresponsive on every state transition.
+        // -skill 2 is "Hurt Me Plenty"; irrelevant here (no monsters) but it
+        //   stops the skill menu appearing.
+        arguments: ['-file', 'tribute.wad', '-warp', '1', '1', '-skill', '2'],
 
         preRun: [function () {
           Module.addRunDependency('tribute-wad');

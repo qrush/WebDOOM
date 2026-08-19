@@ -103,3 +103,27 @@ Note `dspistol.wav` is **not** committed -- the repo's `.gitignore` excludes
 `*.wav`. It is a generated artifact: run `make_shutter.py` to recreate it from
 the committed source before `repack_data.py`, which errors out rather than
 silently falling back to the original gunshot.
+
+## Weapon sprite
+
+`build_tribute.py` draws a first-person camcorder held in both hands, replacing
+the pistol frames (`PISGA0/B0/C0`, plus `PISFA0` as a fullbright overlay).
+Rear view: eyepiece cup up on the left, ribbed battery pack across the back,
+red REC lamp, lens barrel falling away to the right, both hands wrapped round
+it. `--preview` renders the frames to `preview_*.png`.
+
+Placement follows DOOM's psprite rule: a sprite's left edge lands at
+`-leftoffset` in 320-wide space, so `-(160 - W/2)` centres it, and the stock
+pistol frames bottom-anchor by adding `(h - 62)` to a `-106` topoffset. All
+four frames share one 150x95 canvas so the hands never jump between them.
+
+Two things that took a couple of passes:
+
+- Hands are drawn in **phases** -- every dark rim, then every fill, then the
+  highlights -- rather than finishing one finger before starting the next.
+  Per-finger outlining looks fine in isolation, but each new outline carves a
+  gap out of the finger beside it and the hand comes out as a stack of
+  detached sausages.
+- The REC lamp sits in the clear strip between the left fingertips and the
+  battery pack. On the right, where a real camcorder puts it, the thumb covers
+  it and the indicator never shows.

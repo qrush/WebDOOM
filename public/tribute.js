@@ -22,7 +22,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev29-real-shutter';
+  var BUILD = 'rev30-camcorder-pov';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 

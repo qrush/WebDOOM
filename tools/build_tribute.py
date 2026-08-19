@@ -277,109 +277,199 @@ def build_texture1(first_patch_index):
 # camera sprite (replaces the pistol)
 # ---------------------------------------------------------------------------
 
-BODY_DK, BODY_LT, BODY_MID = match(58, 58, 64), match(120, 120, 128), match(84, 84, 92)
-LENS_RING, LENS_GLASS, LENS_GLINT = match(15, 15, 17), match(35, 65, 105), match(215, 230, 240)
-STRAP, REC_RED = match(92, 62, 34), match(200, 40, 40)
-FLASH_HOT, FLASH_MID, FLASH_EDGE = match(255, 255, 235), match(255, 235, 120), match(255, 190, 40)
+# ---------------------------------------------------------------------------
+# First-person camcorder, held in both hands.
+#
+# Drawn from BEHIND, the way you actually see a camcorder you are holding:
+# eyepiece cup up on the left, ribbed battery pack filling the back, red REC
+# button on the right, the lens barrel disappearing away from you, and both
+# hands wrapped around it. The old sprite was a side-on camcorder floating in
+# space with no hands, which read as an object rather than a point of view.
+#
+# Sprite placement: DOOM puts a psprite's left edge at -leftoffset in 320-wide
+# space, and pushes it further down the more negative topoffset is. The stock
+# pistol frames encode that as (h - 62) added to a -106 topoffset, which
+# bottom-anchors them. We keep the same rule and centre horizontally, so the
+# larger two-handed sprite still sits where a weapon should.
+# ---------------------------------------------------------------------------
 
-def canvas(w, h): return [None] * (w * h)
+BODY_BLACK = match(24, 24, 26)
+BODY_DK    = match(46, 46, 50)
+BODY_MID   = match(74, 74, 80)
+BODY_LT    = match(112, 112, 120)
+BATT       = match(38, 38, 42)
+BATT_RIB   = match(62, 62, 68)
+EYECUP     = match(16, 16, 18)
+EYEGLASS   = match(52, 58, 74)
+REC_RED    = match(196, 34, 34)
+REC_HOT    = match(255, 96, 84)
+SKIN_LT    = match(206, 162, 124)
+SKIN_MID   = match(174, 128, 94)
+SKIN_SH    = match(128, 88, 62)
+SKIN_DK    = match(92, 62, 44)
+
+SPR_W, SPR_H = 150, 95            # canvas for every held frame
+# Shared by the held frames and the fullbright overlay so the lamp lines up
+# exactly. Sits in the clear strip between the left fingertips (which reach
+# x~46) and the battery pack (which starts at x=66) -- on the right, where a
+# real camcorder puts it, the thumb covers it and the indicator never shows.
+REC_POS      = (56, 58)
+
+def canvas(w, h):
+    return [None] * (w * h)
 
 def px_(g, w, h, x, y, c):
     x, y = int(round(x)), int(round(y))
-    if 0 <= x < w and 0 <= y < h: g[y * w + x] = c
+    if 0 <= x < w and 0 <= y < h:
+        g[y * w + x] = c
 
 def rect(g, w, h, x0, y0, x1, y1, c):
-    for y in range(int(y0), int(y1)):
-        for x in range(int(x0), int(x1)): px_(g, w, h, x, y, c)
+    for y in range(int(round(y0)), int(round(y1))):
+        for x in range(int(round(x0)), int(round(x1))):
+            px_(g, w, h, x, y, c)
+
+def ellipse(g, w, h, cx, cy, rx, ry, c):
+    for y in range(int(cy - ry - 1), int(cy + ry + 2)):
+        for x in range(int(cx - rx - 1), int(cx + rx + 2)):
+            if rx > 0 and ry > 0 and ((x - cx) / float(rx)) ** 2 + ((y - cy) / float(ry)) ** 2 <= 1.0:
+                px_(g, w, h, x, y, c)
 
 def circle(g, w, h, cx, cy, r, c):
-    for y in range(int(cy - r - 1), int(cy + r + 2)):
-        for x in range(int(cx - r - 1), int(cx + r + 2)):
-            if math.hypot(x - cx, y - cy) <= r: px_(g, w, h, x, y, c)
+    ellipse(g, w, h, cx, cy, r, r, c)
 
-def line(g, w, h, x0, y0, x1, y1, c, thick=1):
+def capsule(g, w, h, x0, y0, x1, y1, r, c):
+    """A finger: a thick line with rounded ends."""
     steps = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
     for i in range(steps + 1):
-        t = i / steps
-        cx, cy = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
-        for ox in range(-thick // 2, thick // 2 + 1):
-            for oy in range(-thick // 2, thick // 2 + 1):
-                px_(g, w, h, cx + ox, cy + oy, c)
+        t = i / float(steps)
+        circle(g, w, h, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, r, c)
 
-def camera_frame(w, h, scale, bx, by):
-    """A shoulder-held camcorder, drawn to read at DOOM's sprite resolution.
+def camcorder_body(g, w, h, dy, recording):
+    """The camcorder itself, seen from behind."""
+    bx0, bx1 = 30, 120
+    by0, by1 = 14 + dy, 76 + dy
 
-    Silhouette does the work: a long low body (camcorders are wider than they
-    are tall, unlike the boxy stills camera this replaced), a fat lens barrel
-    jutting forward on the left, a pale flip-out LCD facing the player on the
-    right, and a carry handle across the top. Everything gets a dark outline
-    so the shape survives the palette + low resolution."""
+    # body block, with a lit top edge and shaded underside for form
+    rect(g, w, h, bx0 - 2, by0 - 2, bx1 + 2, by1 + 2, BODY_BLACK)
+    rect(g, w, h, bx0, by0, bx1, by1, BODY_MID)
+    rect(g, w, h, bx0, by0, bx1, by0 + 5, BODY_LT)
+    rect(g, w, h, bx0, by1 - 6, bx1, by1, BODY_DK)
+
+    # eyepiece cup, up and to the left -- the strongest "camcorder" cue
+    ecx, ecy = 50, by0 + 6
+    ellipse(g, w, h, ecx, ecy, 19, 13, BODY_BLACK)
+    ellipse(g, w, h, ecx, ecy, 15, 10, EYECUP)
+    ellipse(g, w, h, ecx, ecy, 7, 5, EYEGLASS)
+    rect(g, w, h, ecx - 6, ecy + 8, ecx + 8, by0 + 14, BODY_DK)   # neck to body
+
+    # battery pack: big ribbed slab across the back
+    px0, py0, px1, py1 = 66, by0 + 12, 114, by1 - 10
+    rect(g, w, h, px0 - 1, py0 - 1, px1 + 1, py1 + 1, BODY_BLACK)
+    rect(g, w, h, px0, py0, px1, py1, BATT)
+    for rx in range(px0 + 5, px1 - 3, 7):
+        rect(g, w, h, rx, py0 + 4, rx + 2, py1 - 4, BATT_RIB)
+
+    # cassette door seam and a couple of controls on the left of the body
+    rect(g, w, h, bx0 + 4, by0 + 16, bx0 + 26, by0 + 18, BODY_DK)
+    rect(g, w, h, bx0 + 4, by0 + 24, bx0 + 14, by0 + 28, BODY_LT)
+
+    # REC button
+    rcx, rcy = REC_POS[0], REC_POS[1] + dy
+    circle(g, w, h, rcx, rcy, 5, BODY_BLACK)
+    circle(g, w, h, rcx, rcy, 3, REC_HOT if recording else REC_RED)
+
+    # the lens end, falling away from the viewer on the right
+    rect(g, w, h, bx1, by0 + 12, bx1 + 10, by1 - 10, BODY_DK)
+    ellipse(g, w, h, bx1 + 10, (by0 + by1) / 2, 5, 14, BODY_BLACK)
+
+def hands(g, w, h, dy):
+    """Both hands wrapped round the body, first-person grip.
+
+    Drawn in PHASES -- every dark rim first, then every fill, then the
+    highlights -- rather than finishing one finger before starting the next.
+    Per-finger outlining looks fine in isolation but each new outline carves a
+    gap out of the finger beside it, so the hand came out as a stack of
+    detached sausages instead of one connected mass.
+
+    Restrained on purpose: palms tucked into the bottom corners, three fingers
+    a side, tips overlapping the body edge by about ten pixels. At DOOM's
+    resolution the silhouette is all you get, so the camcorder stays the hero
+    and the hands only frame it."""
+
+    def hand(px, py, tips, thumb, mirror):
+        d = -1 if mirror else 1
+        shapes = []
+        # palm mass
+        shapes.append(('e', px, py, 20, 16))
+        shapes.append(('r', px - 18 * (0 if mirror else 1) - (18 if mirror else 0),
+                       py - 2, 36, h))
+        # fingers, and the thumb
+        for i, fy in enumerate(tips):
+            shapes.append(('c', px - d * 4, fy + 5 + dy, px + d * (34 - i * 3), fy + dy, 5))
+        shapes.append(('c', thumb[0], thumb[1] + dy, thumb[2], thumb[3] + dy, thumb[4]))
+        return shapes
+
+    left  = hand(16, 88 + dy, (52, 63, 74), (14, 82, 40, 78, 5), mirror=False)
+    # the right thumb has to START down at the palm and reach up to the body,
+    # otherwise it renders as a bar floating in space beside the camcorder
+    right = hand(134, 88 + dy, (54, 65, 76), (146, 74, 110, 30, 6), mirror=True)
+
+    for phase, col, grow in ((0, SKIN_DK, 1), (1, SKIN_MID, 0), (2, SKIN_LT, -2)):
+        for shapes in (left, right):
+            for sh in shapes:
+                if sh[0] == 'e':
+                    _, cx, cy, rx, ry = sh
+                    if phase == 2:
+                        ellipse(g, w, h, cx - 2, cy + 4, rx - 8, ry - 7, col)
+                    else:
+                        ellipse(g, w, h, cx, cy, rx + grow, ry + grow, col)
+                elif sh[0] == 'r':
+                    if phase == 2:
+                        continue
+                    _, x, y, ww, hh = sh
+                    rect(g, w, h, x - grow, y - grow, x + ww + grow, y + hh, col)
+                else:
+                    _, x0, y0, x1, y1, r = sh
+                    rr = max(1, r + grow)
+                    if phase == 2:
+                        capsule(g, w, h, x0 + 1, y0 - 1, x1 - 1, y1 - 1, rr, col)
+                    else:
+                        capsule(g, w, h, x0, y0, x1, y1, rr, col)
+
+def camera_frame(w, h, dy=0, recording=False):
     g = canvas(w, h)
-    S = scale
-    bw, bh = 44 * S, 24 * S
-    o = 2 * S
-
-    # --- carry handle across the top ---
-    hx0, hx1 = bx + bw * 0.20, bx + bw * 0.78
-    rect(g, w, h, hx0 - o, by - 11 * S - o, hx1 + o, by - 5 * S + o, BODY_DK)
-    rect(g, w, h, hx0, by - 11 * S, hx1, by - 6 * S, BODY_MID)
-    # handle posts down to the body
-    rect(g, w, h, hx0, by - 6 * S, hx0 + 5 * S, by, BODY_DK)
-    rect(g, w, h, hx1 - 5 * S, by - 6 * S, hx1, by, BODY_DK)
-
-    # --- main body ---
-    rect(g, w, h, bx - o, by - o, bx + bw + o, by + bh + o, BODY_DK)
-    rect(g, w, h, bx, by, bx + bw, by + bh, BODY_MID)
-    rect(g, w, h, bx, by, bx + bw, by + 4 * S, BODY_LT)              # top highlight
-    rect(g, w, h, bx, by + bh - 4 * S, bx + bw, by + bh, BODY_DK)    # underside shade
-
-    # --- lens barrel, jutting forward off the left end ---
-    lcx, lcy = bx - 3 * S, by + bh * 0.52
-    lr = bh * 0.46
-    rect(g, w, h, bx - 9 * S - o, lcy - lr - o, bx + 8 * S, lcy + lr + o, BODY_DK)
-    rect(g, w, h, bx - 9 * S, lcy - lr, bx + 8 * S, lcy + lr, BODY_MID)
-    circle(g, w, h, lcx - 5 * S, lcy, lr + o, BODY_DK)               # barrel rim
-    circle(g, w, h, lcx - 5 * S, lcy, lr * 0.82, LENS_RING)
-    circle(g, w, h, lcx - 5 * S, lcy, lr * 0.52, LENS_GLASS)
-    circle(g, w, h, lcx - 6 * S, lcy - lr * 0.28, lr * 0.18, LENS_GLINT)
-
-    # --- flip-out LCD panel on the right, angled toward the player ---
-    px0, py0 = bx + bw * 0.52, by + 3 * S
-    px1, py1 = bx + bw * 0.98, by + bh * 0.78
-    rect(g, w, h, px0 - o, py0 - o, px1 + o, py1 + o, BODY_DK)
-    rect(g, w, h, px0, py0, px1, py1, LENS_GLASS)
-    rect(g, w, h, px0 + S, py0 + S, px1 - S, py0 + 3 * S, LENS_GLINT)  # screen sheen
-
-    # --- red REC lamp on the body, left of the LCD ---
-    rect(g, w, h, bx + bw * 0.30, by + 7 * S, bx + bw * 0.30 + 5 * S, by + 12 * S, REC_RED)
-
-    # --- hand strap under the body ---
-    line(g, w, h, bx + bw * 0.30, by + bh, bx + bw * 0.72, by + bh, STRAP, thick=int(3 * S))
-    line(g, w, h, bx + bw * 0.30, by + bh, bx + bw * 0.26, by + bh + 7 * S, STRAP, thick=int(2 * S))
-    line(g, w, h, bx + bw * 0.72, by + bh, bx + bw * 0.76, by + bh + 7 * S, STRAP, thick=int(2 * S))
+    camcorder_body(g, w, h, dy, recording)
+    hands(g, w, h, dy)
     return g
 
-def flash_frame(w, h, cx, cy, r):
+def flash_frame(w, h, dy=0):
+    """Fullbright overlay: just the REC lamp glowing, no muzzle flash."""
     g = canvas(w, h)
-    circle(g, w, h, cx, cy, r * 0.7, FLASH_MID)
-    circle(g, w, h, cx, cy, r * 0.4, FLASH_HOT)
-    for i in range(8):
-        a = (2 * math.pi / 8) * i
-        line(g, w, h, cx + math.cos(a) * r * 0.5, cy + math.sin(a) * r * 0.5,
-             cx + math.cos(a) * r * 1.05, cy + math.sin(a) * r * 1.05, FLASH_EDGE, thick=2)
+    cx, cy = REC_POS[0], REC_POS[1] + dy
+    circle(g, w, h, cx, cy, 6, REC_RED)
+    circle(g, w, h, cx, cy, 4, REC_HOT)
     return g
 
 def build_sprite_replacements():
+    """All held frames share one canvas so the hands never jump between frames.
+
+    Offsets follow DOOM's psprite rule: the left edge lands at -leftoffset in
+    320-wide space, so -(160 - W/2) centres it; and the stock pistol frames
+    bottom-anchor by adding (h - 62) to a -106 topoffset, which we reuse.
+    """
+    xo = -(160 - SPR_W // 2)
+    yo = -106 + (SPR_H - 62)
     frames = {}
-    for name, w, h, xo, yo, sc, bx, by in [
-        ('PISGA0', 57, 62, -126, -106, 0.92, 12, 24),
-        ('PISGB0', 79, 82, -104,  -86, 1.15, 15, 32),
-        ('PISGC0', 66, 81, -119,  -87, 1.02, 13, 33),
-    ]:
-        frames[name] = encode_picture(w, h, camera_frame(w, h, sc, bx, by), xo, yo, None)
-    w, h = 41, 38
-    frames['PISFA0'] = encode_picture(w, h, flash_frame(w, h, w * 0.55, h * 0.55, 15),
-                                      -140, -66, None)
+    # idle, then the two "recording" frames: a small lift and the REC lamp lit,
+    # instead of the pistol's recoil
+    for name, dy, rec in (('PISGA0', 0, False),
+                          ('PISGB0', -3, True),
+                          ('PISGC0', -1, True)):
+        frames[name] = encode_picture(SPR_W, SPR_H,
+                                      camera_frame(SPR_W, SPR_H, dy, rec), xo, yo, None)
+    # fullbright overlay, same canvas and offsets so it lands exactly on the lamp
+    frames['PISFA0'] = encode_picture(SPR_W, SPR_H,
+                                      flash_frame(SPR_W, SPR_H, -3), xo, yo, None)
     return frames
 
 # ---------------------------------------------------------------------------
@@ -528,9 +618,7 @@ if '--preview' in sys.argv:
                 rows.append(bytes(row))
         write_png(os.path.join(HERE, 'preview_%s.png' % name), w * scale, h * scale, rows)
 
-    for nm, w, h, sc, bx, by in [('PISGA0', 57, 62, 0.92, 12, 24),
-                                 ('PISGB0', 79, 82, 1.15, 15, 32),
-                                 ('PISGC0', 66, 81, 1.02, 13, 33)]:
-        preview(nm, w, h, camera_frame(w, h, sc, bx, by))
-    preview('PISFA0', 41, 38, flash_frame(41, 38, 41 * 0.55, 38 * 0.55, 15))
+    for nm, dy, rec in (('PISGA0', 0, False), ('PISGB0', -3, True), ('PISGC0', -1, True)):
+        preview(nm, SPR_W, SPR_H, camera_frame(SPR_W, SPR_H, dy, rec))
+    preview('PISFA0', SPR_W, SPR_H, flash_frame(SPR_W, SPR_H, -3))
     print('wrote preview_*.png')

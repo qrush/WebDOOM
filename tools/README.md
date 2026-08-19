@@ -109,21 +109,18 @@ silently falling back to the original gunshot.
 `build_tribute.py` draws a first-person camcorder held in both hands, replacing
 the pistol frames (`PISGA0/B0/C0`, plus `PISFA0` as a fullbright overlay).
 Rear view: eyepiece cup up on the left, ribbed battery pack across the back,
-red REC lamp, lens barrel falling away to the right, both hands wrapped round
-it. `--preview` renders the frames to `preview_*.png`.
+red REC lamp and lens barrel falling away to the right. `--preview` renders
+the frames to `preview_*.png`.
+
+Frames are drawn on one 150x95 canvas and then auto-cropped to the tightest
+box containing artwork from **all** of them. Cropping each frame to its own
+bounds would let the recording frames -- which sit a few pixels higher --
+shift relative to the idle one, so the camcorder would visibly jump when you
+pull the trigger.
 
 Placement follows DOOM's psprite rule: a sprite's left edge lands at
 `-leftoffset` in 320-wide space, so `-(160 - W/2)` centres it, and the stock
-pistol frames bottom-anchor by adding `(h - 62)` to a `-106` topoffset. All
-four frames share one 150x95 canvas so the hands never jump between them.
+pistol frames bottom-anchor by adding `(h - 62)` to a `-106` topoffset.
 
-Two things that took a couple of passes:
-
-- Hands are drawn in **phases** -- every dark rim, then every fill, then the
-  highlights -- rather than finishing one finger before starting the next.
-  Per-finger outlining looks fine in isolation, but each new outline carves a
-  gap out of the finger beside it and the hand comes out as a stack of
-  detached sausages.
-- The REC lamp sits in the clear strip between the left fingertips and the
-  battery pack. On the right, where a real camcorder puts it, the thumb covers
-  it and the indicator never shows.
+The REC lamp sits left of the battery pack rather than on the right where a
+real camcorder puts it, so nothing overlaps the recording indicator.

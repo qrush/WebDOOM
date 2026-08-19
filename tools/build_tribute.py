@@ -439,7 +439,6 @@ def hands(g, w, h, dy):
 def camera_frame(w, h, dy=0, recording=False):
     g = canvas(w, h)
     camcorder_body(g, w, h, dy, recording)
-    hands(g, w, h, dy)
     return g
 
 def flash_frame(w, h, dy=0):
@@ -450,6 +449,28 @@ def flash_frame(w, h, dy=0):
     circle(g, w, h, cx, cy, 4, REC_HOT)
     return g
 
+def _union_bbox(frames, w, h):
+    """Tightest box containing artwork from ALL frames.
+
+    Cropping each frame to its own bounds would let the recording frames --
+    which sit a few pixels higher -- shift relative to the idle one, so the
+    camcorder would visibly jump when you pull the trigger."""
+    x0, y0, x1, y1 = w, h, 0, 0
+    for g in frames:
+        for y in range(h):
+            row = y * w
+            for x in range(w):
+                if g[row + x] is not None:
+                    if x < x0: x0 = x
+                    if x > x1: x1 = x
+                    if y < y0: y0 = y
+                    if y > y1: y1 = y
+    return x0, y0, x1 + 1, y1 + 1
+
+def _crop(g, w, h, box):
+    x0, y0, x1, y1 = box
+    return [g[y * w + x] for y in range(y0, y1) for x in range(x0, x1)]
+
 def build_sprite_replacements():
     """All held frames share one canvas so the hands never jump between frames.
 
@@ -457,19 +478,21 @@ def build_sprite_replacements():
     320-wide space, so -(160 - W/2) centres it; and the stock pistol frames
     bottom-anchor by adding (h - 62) to a -106 topoffset, which we reuse.
     """
-    xo = -(160 - SPR_W // 2)
-    yo = -106 + (SPR_H - 62)
-    frames = {}
     # idle, then the two "recording" frames: a small lift and the REC lamp lit,
     # instead of the pistol's recoil
-    for name, dy, rec in (('PISGA0', 0, False),
-                          ('PISGB0', -3, True),
-                          ('PISGC0', -1, True)):
-        frames[name] = encode_picture(SPR_W, SPR_H,
-                                      camera_frame(SPR_W, SPR_H, dy, rec), xo, yo, None)
-    # fullbright overlay, same canvas and offsets so it lands exactly on the lamp
-    frames['PISFA0'] = encode_picture(SPR_W, SPR_H,
-                                      flash_frame(SPR_W, SPR_H, -3), xo, yo, None)
+    specs = [('PISGA0', camera_frame(SPR_W, SPR_H, 0, False)),
+             ('PISGB0', camera_frame(SPR_W, SPR_H, -3, True)),
+             ('PISGC0', camera_frame(SPR_W, SPR_H, -1, True)),
+             ('PISFA0', flash_frame(SPR_W, SPR_H, -3))]
+
+    box = _union_bbox([g for _n, g in specs], SPR_W, SPR_H)
+    cw, ch = box[2] - box[0], box[3] - box[1]
+    xo = -(160 - cw // 2)              # centre it in 320-wide psprite space
+    yo = -106 + (ch - 62)              # bottom-anchor, as the stock frames do
+
+    frames = {}
+    for name, g in specs:
+        frames[name] = encode_picture(cw, ch, _crop(g, SPR_W, SPR_H, box), xo, yo, None)
     return frames
 
 # ---------------------------------------------------------------------------
@@ -618,7 +641,12 @@ if '--preview' in sys.argv:
                 rows.append(bytes(row))
         write_png(os.path.join(HERE, 'preview_%s.png' % name), w * scale, h * scale, rows)
 
-    for nm, dy, rec in (('PISGA0', 0, False), ('PISGB0', -3, True), ('PISGC0', -1, True)):
-        preview(nm, SPR_W, SPR_H, camera_frame(SPR_W, SPR_H, dy, rec))
-    preview('PISFA0', SPR_W, SPR_H, flash_frame(SPR_W, SPR_H, -3))
+    _specs = [('PISGA0', camera_frame(SPR_W, SPR_H, 0, False)),
+              ('PISGB0', camera_frame(SPR_W, SPR_H, -3, True)),
+              ('PISGC0', camera_frame(SPR_W, SPR_H, -1, True)),
+              ('PISFA0', flash_frame(SPR_W, SPR_H, -3))]
+    _box = _union_bbox([g for _n, g in _specs], SPR_W, SPR_H)
+    _cw, _ch = _box[2] - _box[0], _box[3] - _box[1]
+    for nm, g in _specs:
+        preview(nm, _cw, _ch, _crop(g, SPR_W, SPR_H, _box))
     print('wrote preview_*.png')

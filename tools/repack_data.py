@@ -25,6 +25,16 @@ SRC_DATA = os.path.join(PUB, 'doom1.data')
 OUT_JS   = os.path.join(PUB, 'tribute-engine.js')
 OUT_DATA = os.path.join(PUB, 'tribute.data')
 
+# Files substituted on the way into the slim package. The camera weapon should
+# not go bang: i_sound.c:185 loads effects as plain files ("sfx/ds<name>.wav"),
+# and the pistol's sfx name is "pistol" (sounds.c:128), so overriding
+# sfx/dspistol.wav is all it takes to turn the gunshot into a shutter click.
+# Regenerate the replacement with tools/make_shutter.py.
+OVERRIDES = {
+    '/sfx/dspistol.wav': os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      'dspistol.wav'),
+}
+
 def keep(name):
     if name.endswith('.wad'):  return True     # prboom.wad + doom1.wad
     if '/sfx/' in name:        return True     # weapon/door sounds, ~1.2MB
@@ -40,11 +50,16 @@ blob = open(SRC_DATA, 'rb').read()
 if len(blob) != old_size:
     sys.exit('ERROR: doom1.data is %d bytes, manifest says %d' % (len(blob), old_size))
 
-out, kept, cur = bytearray(), [], 0
+out, kept, cur, swapped = bytearray(), [], 0, []
 for f in files:
     if not keep(f['filename']):
         continue
-    chunk = blob[f['start']:f['end']]
+    sub = OVERRIDES.get(f['filename'])
+    if sub and os.path.exists(sub):
+        chunk = open(sub, 'rb').read()
+        swapped.append((f['filename'], f['end'] - f['start'], len(chunk)))
+    else:
+        chunk = blob[f['start']:f['end']]
     kept.append({'start': cur, 'audio': f.get('audio', 0),
                  'end': cur + len(chunk), 'filename': f['filename']})
     out += chunk
@@ -65,6 +80,8 @@ open(OUT_JS, 'w').write(new_js)
 assert '"tribute.data"' in new_js and n >= 1, 'failed to retarget the package name'
 assert 'doom1.wasm' in new_js, 'lost the wasm reference'
 
+for (nm, was, now) in swapped:
+    print('substituted %s: %d -> %d bytes' % (nm, was, now))
 print('kept %d of %d files' % (len(kept), len(files)))
 for k in kept[:4]:
     print('   %-28s %9d bytes' % (k['filename'], k['end'] - k['start']))

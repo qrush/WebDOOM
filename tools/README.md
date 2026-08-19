@@ -71,3 +71,21 @@ post-order so the root lands last (the renderer starts at `numnodes-1`).
 
 It is validated to leave convex shapes alone -- a square or a lone octagon
 still produces 0 nodes and 1 subsector, exactly matching the old output.
+
+## Sounds
+
+This build loads sound effects as plain files rather than WAD lumps:
+`i_sound.c:185` builds `"sfx/ds<name>.wav"` and hands it to `Mix_LoadWAV`. The
+pistol's sfx name is `"pistol"` (`sounds.c:128`), so the gunshot is just
+`sfx/dspistol.wav`.
+
+`make_shutter.py` synthesises a camera shutter to replace it -- two mechanical
+transients (mirror up / first curtain, then second curtain / mirror down about
+55ms later), because a single transient reads as a tap rather than a camera.
+Output matches the original exactly: mono, 11025 Hz, 8-bit unsigned PCM.
+
+`repack_data.py` substitutes it into the slim package via its `OVERRIDES` map,
+so no engine or WAD change is involved.
+
+    python3 tools/make_shutter.py     # regenerate the click
+    python3 tools/repack_data.py      # rebuild public/tribute.data

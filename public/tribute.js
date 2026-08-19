@@ -19,7 +19,10 @@
  * heap and overwrite it with palette-quantised video every frame.
  */
 (function () {
-  var BUILD = 'rev25-three-rooms';
+  // sidecars are regenerated whenever the map changes; a cached copy
+  // silently breaks texture lookup, so always revalidate them
+  var NOCACHE = { cache: 'no-cache' };
+  var BUILD = 'rev27-audible';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -96,6 +99,7 @@
     }
     if (end >= i32.length) {
       sc.cursor = 0;
+      sc.passDone = true;
       // Word scanning assumes the composite is 4-byte aligned, which zone
       // blocks always are in practice. If a whole pass finds nothing, fall
       // back to an unaligned byte search once before giving up on this sweep.
@@ -266,6 +270,13 @@
     }
     if (best === currentRoom) return;
     currentRoom = best;
+    // walking into a room means its walls are about to be drawn, so clear any
+    // backoff on its screens and let them be found straight away
+    for (var r = 0; r < screens.length; r++) {
+      if (screens[r].def.room === currentRoom && screens[r].addr < 0) {
+        screens[r].nextTry = 0; screens[r].backoff = 0;
+      }
+    }
     for (var k = 0; k < screens.length; k++) {
       var sc = screens[k];
       if (!sc.video) continue;
@@ -278,8 +289,12 @@
     }
   }
 
-  var NEAR = 150, FAR = 430;      // map units: full volume -> silence
-                                  // (scaled to the tighter 320-unit walls)
+  /* Map units: full volume -> silence. These have to be scaled to the ROOM,
+     not to arm's length. A room's centre is 386 units from every screen, so
+     the old 150/430 curve (squared, no less) put the middle of a room at 2.5%
+     volume -- which is why the videos went silent once you stopped standing
+     with your nose against a wall. */
+  var NEAR = 120, FAR = 950;
   var audioArmed = false;
 
   function armAudio() {
@@ -292,14 +307,31 @@
     if (b) { b.textContent = '🔊 sound on'; b.classList.add('on'); }
   }
 
+  /* Exactly ONE screen is audible at a time: the one you are aiming at, or
+     the nearest one in this room if you are not pointed at any. Six or seven
+     overlapping soundtracks is mush, and the whole point is to hear the screen
+     you walked up to. Falloff is linear so the far side of a room is still
+     faintly audible rather than abruptly silent. */
+  function audioFocus(p) {
+    if (!audioArmed || overlay || !p) return null;
+    var sc = aimedScreen();
+    if (sc && (currentRoom < 0 || sc.def.room === currentRoom)) return sc;
+    var best = null;
+    for (var i = 0; i < screens.length; i++) {
+      var c = screens[i];
+      if (currentRoom >= 0 && c.def.room !== currentRoom) continue;
+      if (!best || c.dist < best.dist) best = c;
+    }
+    return best;
+  }
+
   function updateAudio(p) {
+    var focus = audioFocus(p);
     for (var i = 0; i < screens.length; i++) {
       var sc = screens[i];
       if (!sc.video) continue;
-      if (overlay || !audioArmed || !p || sc.def.room !== currentRoom) { sc.video.volume = 0; continue; }
-      var t = (FAR - sc.dist) / (FAR - NEAR);
-      var g = Math.max(0, Math.min(1, t));
-      sc.video.volume = g * g;          // gentler far-field falloff
+      if (sc !== focus) { if (sc.video.volume) sc.video.volume = 0; continue; }
+      sc.video.volume = Math.max(0, Math.min(1, (FAR - sc.dist) / (FAR - NEAR)));
     }
   }
 
@@ -346,43 +378,54 @@
      sweep if the guess is wrong. */
   var lastFound = -1, acqIdx = 0;
 
+  /* Acquisition has to be strictly bounded or it eats the frame loop.
+     A wall texture's composite does not exist until DOOM first draws that
+     wall, so screens the player has never faced can never be found -- and
+     rescanning 256MB for each of them, forever, saturates the main thread
+     hard enough that requestAnimationFrame stops firing entirely.
+
+     So: the player comes first (one cheap, very selective int32 key, and
+     rooms/audio/aim all depend on it), then only screens in the CURRENT room,
+     and any screen that completes a fruitless full pass backs off before it is
+     allowed to try again. */
+  var BACKOFF_MIN = 2000, BACKOFF_MAX = 20000;
+
   function acquire() {
     if (frames % ACQUIRE_EVERY !== 0) return;
-    var t0 = performance.now();
+    var now = performance.now();
+    var t0 = now;
 
-    /* Interleave the player search with the screen searches. Previously the
-       player was only looked for once EVERY screen had been located, but a
-       screen the player has never faced has no composite in memory at all, so
-       that never happened -- the player stayed unlocated, proximity audio
-       stayed silent, and "which screen am I facing" always fell back to
-       screen 0. The player key is a single very selective int32, so alternating
-       costs almost nothing. */
-    if (playerAddr < 0 && (frames / ACQUIRE_EVERY) % 2 === 0) {
+    if (playerAddr < 0) {
       if (!resolvePlayer()) scanPlayerChunk();
       scanCost = performance.now() - t0;
       return;
     }
 
-    /* Rotate through the unlocated screens instead of always retrying the
-       first one. DOOM builds a wall texture's composite lazily, the first time
-       that wall is drawn, so screens behind the player simply do not exist in
-       memory yet. Restarting at index 0 every time meant one never-yet-drawn
-       screen blocked every other screen from ever being scanned. */
-    for (var n = 0; n < screens.length; n++) {
-      var idx = (acqIdx + n) % screens.length;
-      var sc = screens[idx];
+    var pending = [];
+    for (var i = 0; i < screens.length; i++) {
+      var sc = screens[i];
       if (sc.addr >= 0) continue;
-      if (!sc.primed && lastFound >= 0) {
-        sc.cursor = Math.max(0, (lastFound >> 2) - (512 << 10));
-        sc.primed = true;
-      }
-      if (scanFor(sc)) lastFound = sc.addr;
-      acqIdx = (idx + 1) % screens.length;
-      scanCost = performance.now() - t0;
-      return;
+      if ((sc.nextTry || 0) > now) continue;
+      if (currentRoom >= 0 && sc.def.room !== currentRoom) continue;
+      pending.push(sc);
     }
+    if (!pending.length) { scanCost = 0; return; }
 
-    if (playerAddr < 0 && !resolvePlayer()) scanPlayerChunk();
+    var pick = pending[acqIdx % pending.length];
+    acqIdx++;
+    if (!pick.primed && lastFound >= 0) {
+      pick.cursor = Math.max(0, (lastFound >> 2) - (512 << 10));
+      pick.primed = true;
+    }
+    pick.passDone = false;
+    if (scanFor(pick)) {
+      lastFound = pick.addr;
+      pick.backoff = 0;
+    } else if (pick.passDone) {
+      // swept the whole heap and it simply is not there yet
+      pick.backoff = Math.min(BACKOFF_MAX, Math.max(BACKOFF_MIN, (pick.backoff || 0) * 2));
+      pick.nextTry = now + pick.backoff;
+    }
     scanCost = performance.now() - t0;
   }
 
@@ -533,10 +576,10 @@
   /* --------------------------------- boot -------------------------------- */
 
   Promise.all([
-    fetch('screen.json').then(function (r) { return r.json(); }),
-    fetch('palette.lut').then(function (r) { return r.arrayBuffer(); }),
-    fetch('screens.bin').then(function (r) { return r.arrayBuffer(); }),
-    fetch('videos.json').then(function (r) { return r.json(); })
+    fetch('screen.json', NOCACHE).then(function (r) { return r.json(); }),
+    fetch('palette.lut', NOCACHE).then(function (r) { return r.arrayBuffer(); }),
+    fetch('screens.bin', NOCACHE).then(function (r) { return r.arrayBuffer(); }),
+    fetch('videos.json', NOCACHE).then(function (r) { return r.json(); })
   ]).then(function (res) {
     meta = res[0];
     lut = new Uint8Array(res[1]);

@@ -89,3 +89,8 @@ so no engine or WAD change is involved.
 
     python3 tools/make_shutter.py     # regenerate the click
     python3 tools/repack_data.py      # rebuild public/tribute.data
+
+Note `dspistol.wav` is **not** committed -- the repo's `.gitignore` excludes
+`*.wav`. It is a generated artifact: run `make_shutter.py` to recreate it
+before `repack_data.py`, which now errors out rather than silently falling back
+to the original gunshot.

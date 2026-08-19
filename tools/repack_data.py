@@ -55,7 +55,13 @@ for f in files:
     if not keep(f['filename']):
         continue
     sub = OVERRIDES.get(f['filename'])
-    if sub and os.path.exists(sub):
+    if sub:
+        if not os.path.exists(sub):
+            # loud, because the fallback silently restores the gunshot and the
+            # generated wav is gitignored (*.wav) so a fresh clone won't have it
+            sys.exit('ERROR: override %s is missing for %s.\n'
+                     '       Run: python3 tools/make_shutter.py'
+                     % (os.path.relpath(sub), f['filename']))
         chunk = open(sub, 'rb').read()
         swapped.append((f['filename'], f['end'] - f['start'], len(chunk)))
     else:

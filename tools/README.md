@@ -79,10 +79,19 @@ This build loads sound effects as plain files rather than WAD lumps:
 pistol's sfx name is `"pistol"` (`sounds.c:128`), so the gunshot is just
 `sfx/dspistol.wav`.
 
-`make_shutter.py` synthesises a camera shutter to replace it -- two mechanical
-transients (mirror up / first curtain, then second curtain / mirror down about
-55ms later), because a single transient reads as a tap rather than a camera.
-Output matches the original exactly: mono, 11025 Hz, 8-bit unsigned PCM.
+`make_shutter.py` builds the replacement from `tools/shutter-source.mp3`, a
+real SLR shutter recording. The raw file cannot be dropped in as-is: it opens
+with ~160ms of silence, which in a game reads as input lag between pulling the
+trigger and hearing anything, and trails off with ~370ms of near-silence. The
+script decodes it, trims to the part that actually makes noise, normalises,
+fades the edges so the trim cannot pop, and emits the exact format the original
+used -- mono, 11025 Hz, 8-bit unsigned PCM (0.38s, against the gunshot's 0.51s).
+
+Needs `ffmpeg` for the MP3 decode; everything after that is deterministic.
+
+The source file is committed (forced past the repo's `*.mp3` ignore rule) so
+the build is reproducible. It came from Freesound -- **check the licence and
+attribution before publishing this anywhere public.**
 
 `repack_data.py` substitutes it into the slim package via its `OVERRIDES` map,
 so no engine or WAD change is involved.
@@ -91,6 +100,6 @@ so no engine or WAD change is involved.
     python3 tools/repack_data.py      # rebuild public/tribute.data
 
 Note `dspistol.wav` is **not** committed -- the repo's `.gitignore` excludes
-`*.wav`. It is a generated artifact: run `make_shutter.py` to recreate it
-before `repack_data.py`, which now errors out rather than silently falling back
-to the original gunshot.
+`*.wav`. It is a generated artifact: run `make_shutter.py` to recreate it from
+the committed source before `repack_data.py`, which errors out rather than
+silently falling back to the original gunshot.

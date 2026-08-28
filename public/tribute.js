@@ -23,7 +23,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev32-two-rooms';
+  var BUILD = 'rev33-aim';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -473,12 +473,17 @@
     return best;
   }
 
-  /* Which wall the player's crosshair is actually pointed at.
-     Rather than comparing bearings (which happily "picks" a screen even when
-     you are aiming at the plain wall beside it), cast the aim ray against the
-     real wall segments from the WAD and see what it hits. The room is convex,
-     so the ray crosses exactly one segment and there is no occlusion.
-     Returns the screen for that wall, or null when a plain wall was hit. */
+  /* Which wall the player's crosshair is actually pointed at: cast the aim ray
+     against the real wall segments from the WAD and take the NEAREST hit.
+     (Comparing bearings instead would happily "pick" a screen you are not
+     looking at, and with two rooms joined by a hallway the ray can cross
+     several walls -- aim through the doorway and the far room is genuinely
+     behind it -- so nearest-hit matters, this map is not convex.)
+
+     A hit on one of the plain stubs flanking a screen counts as that screen.
+     The video is 256 units wide on a 320-unit wall, and from the middle of a
+     room those margins eat ~25% of a full turn, so without this a quarter of
+     the shots that look aimed at a video land on bare wall. */
   function aimedScreen() {
     var p = playerPos(), a = playerAngle();
     if (!p || a === null) return null;
@@ -495,13 +500,21 @@
       var u = (ox * dy - oy * dx) / den;                   // along the segment
       if (t > 0 && u >= 0 && u <= 1 && t < bestT) { bestT = t; hit = w; }
     }
-    if (!hit || hit.screen === null || hit.screen === undefined) return null;
-    return screens[hit.screen] || null;
+    if (!hit) return null;
+    var idx = (hit.screen !== null && hit.screen !== undefined) ? hit.screen
+            : (hit.flank !== null && hit.flank !== undefined) ? hit.flank : null;
+    return idx === null ? null : (screens[idx] || null);
   }
 
-  function openOverlay(forced) {
+  /* `aimed` means the request came from shooting, so it must open the wall you
+     actually hit or nothing at all. Falling back to nearestScreen() there is
+     worse than doing nothing: every screen in a room sits exactly 386 units
+     from its centre, so "nearest" is decided by rounding noise and opens an
+     essentially random video -- which reads as the crosshair being broken. The
+     toolbar button has no aim to speak of, so it still falls back. */
+  function openOverlay(forced, aimed) {
     if (overlay) return;
-    var sc = forced || aimedScreen() || nearestScreen();
+    var sc = forced || aimedScreen() || (aimed ? null : nearestScreen());
     if (!sc || !sc.id) return;
     overlay = document.createElement('div');
     overlay.id = 'tribute-overlay';

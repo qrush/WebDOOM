@@ -89,18 +89,31 @@ def _edge(a, b, screen_room=None):
     if math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6:
         return
     if screen_room is None:
-        EDGES.append((a, b, WALL_TEX, None))
+        EDGES.append((a, b, WALL_TEX, None, None))
     else:
         SCREENS.append({'room': ROOM_INDEX[screen_room],
                         'centre': ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0),
                         'a': a, 'b': b})
-        EDGES.append((a, b, None, len(SCREENS) - 1))
+        EDGES.append((a, b, None, len(SCREENS) - 1, None))
 
 def _plain_wall(c, k, room):
+    """A screen centred on the wall, with a plain stub either side.
+
+    The stubs are tagged with the screen they flank. A 256-wide screen on a
+    320-wide wall leaves 32 units of METAL1 at each end, and from the middle of
+    a room that margin swallows about a quarter of every full turn -- so a
+    quarter of the shots aimed at a video hit bare wall instead. Treating the
+    whole octagon side as one target makes aiming say what it looks like it
+    says, without shrinking the margin to nothing."""
     a, s1, s2 = _wall_pts(c, k)
+    lead = len(EDGES)
     _edge(a, s1)
     _edge(s1, s2, screen_room=room)
+    idx = len(SCREENS) - 1
     _edge(s2, _corner(c, k + 1))
+    for e in range(lead, len(EDGES)):
+        if EDGES[e][3] is None:
+            EDGES[e] = EDGES[e][:4] + (idx,)
 
 def _branch_loop(c, j, room, entry):
     """From the doorway edge we arrived at, clockwise all the way back to the
@@ -153,9 +166,9 @@ def _vid(p):
         VERTS.append(key)
     return _vmap[key]
 
-WALLS = []        # (v_from, v_to, texture)
-for (a, b, tex, sidx) in EDGES:
-    WALLS.append((_vid(a), _vid(b), tex if tex else SCREEN_TEXS[sidx]))
+WALLS = []        # (v_from, v_to, texture, flanked screen or None)
+for (a, b, tex, sidx, flank) in EDGES:
+    WALLS.append((_vid(a), _vid(b), tex if tex else SCREEN_TEXS[sidx], flank))
 
 PLAYER_X, PLAYER_Y = -151, -233   # in the main room; deliberately odd numbers
                                   # so the heap search for the mobj is selective
@@ -172,13 +185,13 @@ def enc_vertexes():
 
 def enc_linedefs():
     out = b''
-    for i, (a, b, _t) in enumerate(WALLS):
+    for i, (a, b, _t, _f) in enumerate(WALLS):
         out += struct.pack('<HHHhhHH', a, b, 1, 0, 0, i, 0xFFFF)
     return out
 
 def enc_sidedefs():
     out = b''
-    for _a, _b, tex in WALLS:
+    for _a, _b, tex, _f in WALLS:
         out += struct.pack('<hh8s8s8sh', 0, 0, b'-', b'-', tex.encode()[:8], 0)
     return out
 
@@ -191,7 +204,7 @@ def build_bsp():
     prboom reads as "one subsector, draw everything" -- correct only while the
     map is convex, which it no longer is."""
     segs = [Seg(VERTS[a][0], VERTS[a][1], VERTS[b][0], VERTS[b][1], i)
-            for i, (a, b, _t) in enumerate(WALLS)]
+            for i, (a, b, _t, _f) in enumerate(WALLS)]
     tree = BSP(segs)
     return tree, tree.encode(lambda x, y: _vid((x, y)))
 
@@ -624,10 +637,13 @@ open(os.path.join(OUT_DIR, 'screen.json'), 'w').write(json.dumps({
     # interior point crosses exactly one segment -- no occlusion to worry about.
     'rooms': [{'key': ROOM_META[n][0], 'name': ROOM_META[n][1],
                'centre': [round(c[0]), round(c[1])]} for (n, c) in ROOMS],
+    # 'screen' is the wall that IS a video; 'flank' is a plain stub beside one,
+    # which aims at the same video so the whole octagon side is one target.
     'walls': [
         {'a': list(VERTS[a]), 'b': list(VERTS[b]),
-         'screen': (SCREEN_TEXS.index(t) if t in SCREEN_TEXS else None)}
-        for (a, b, t) in WALLS
+         'screen': (SCREEN_TEXS.index(t) if t in SCREEN_TEXS else None),
+         'flank': f}
+        for (a, b, t, f) in WALLS
     ],
     'note': 'composites are column-major: pixels[x*height + y] (src/r_patch.c:277)',
 }, indent=1))

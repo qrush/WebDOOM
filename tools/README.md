@@ -60,6 +60,14 @@ Screens: one doorway per room leaves 7 of its 8 walls free, so it is exactly
 7 + 7 = 14. Adding a second doorway (the earlier three-room triangle) costs the
 main room a screen, which is why that version could only be 6/7/7.
 
+Each screen's wall also emits two plain stubs (256-wide video on a 320-wide
+wall), and those stubs are tagged in `screen.json` with the screen they
+`flank`. The runtime treats a hit on a stub as a hit on that video, so the
+whole octagon side is one aim target -- from the middle of a room the bare
+margins otherwise cover ~25% of a full turn, and a shot landing there used to
+do nothing (or, from the toolbar path, open whichever screen was "nearest",
+which is noise: all seven sit exactly 386 units from the centre).
+
 `public/videos.json` groups IDs under a **room key** (`lenny`, `team`), not by
 screen index, and hands them out in wall order. Screen numbering interleaves
 across rooms -- the main room owns `WISTSC00..05` *and* `WISTSC13`, because its

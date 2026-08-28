@@ -1,7 +1,8 @@
 'use strict';
 /*
- * WebDOOM 10-year tribute -- two octagonal rooms joined by a hallway, with a
- * Wistia video on each of their seven free walls, plus proximity audio and a
+ * WebDOOM 10-year tribute -- two rooms joined by a hallway, with a Wistia
+ * video on every wall that is not a doorway (an octagon for Lenny, 7 videos;
+ * a nonagon for the team, one per person), plus proximity audio and a
  * full-quality overlay player.
  *
  * WHY THIS WRITES INTO WASM MEMORY:
@@ -23,7 +24,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev35-shuffle';
+  var BUILD = 'rev36-carlon';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -257,7 +258,7 @@
 
   var currentRoom = -1;
 
-  /* Which room the player is standing in, by nearest room centre. With 14
+  /* Which room the player is standing in, by nearest room centre. With 15
      screens, decoding every video at once is hopeless -- only the current
      room's videos are allowed to play; the rest are paused so they cost
      nothing. */

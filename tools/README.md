@@ -50,15 +50,29 @@ Outputs:
 
 ## Map layout
 
-Two octagonal rooms joined by a hallway running north-east. Every floor and
-ceiling is at the same height, so the whole complex is a **single sector**
-whose boundary is one closed loop -- walk the main room clockwise and, at the
-doorway, detour out along the hallway, around the branch room, and back. Every
-linedef stays one-sided and there are no two-sided lines to get wrong.
+Two rooms joined by a hallway running north-east. Every floor and ceiling is at
+the same height, so the whole complex is a **single sector** whose boundary is
+one closed loop -- walk the main room clockwise and, at the doorway, detour out
+along the hallway, around the branch room, and back. Every linedef stays
+one-sided and there are no two-sided lines to get wrong.
 
-Screens: one doorway per room leaves 7 of its 8 walls free, so it is exactly
-7 + 7 = 14. Adding a second doorway (the earlier three-room triangle) costs the
-main room a screen, which is why that version could only be 6/7/7.
+Each room in `ROOMS` carries its own `sides`, so one can be given an extra wall
+without disturbing the other. One wall always goes to the doorway, so a room
+shows `sides - 1` videos: the Lenny octagon 7, the team **nonagon** 8 -- one per
+person who recorded a message. (A second doorway costs another screen, which is
+why the earlier three-room triangle could only manage 6/7/7.)
+
+A room whose side count differs from its neighbour's must be **rotated** so its
+doorway wall points back down the hallway: with 8 against 9 no wall lines up on
+its own, and without `rot` the corridor meets the room at an angle and the
+outline crosses itself. `_normal()` gives the bearing a wall faces, and the
+rotation is chosen to make the team doorway's normal exactly `_normal(main,
+MAIN_DOOR) + pi`.
+
+The build **fails** if `videos.json` and the map disagree: a non-shuffled room
+must list exactly one ID per wall. With fewer, a wall sits on static forever;
+with more, the surplus is silently ignored -- which is how an eighth team
+message can be added and simply never appear, with nothing reporting a problem.
 
 A room named in `videos.json`'s `shuffle` list is a **pool**: it may hold more
 IDs than the room has walls, and each page load draws a fresh random subset

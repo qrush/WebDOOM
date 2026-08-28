@@ -13,12 +13,12 @@ FLOOR_FLAT = 'FLOOR4_8'
 CEIL_FLAT  = 'CEIL3_5'
 ROOM_H     = SCREEN_H
 
-OCT_SIDE   = 320                # octagon wall length
+SIDE       = 320                # wall length, the same in every room
 DOOR_W     = 192                # hallway opening
 HALL_LEN   = 420                # straight run between rooms
 
-R  = OCT_SIDE / (2.0 * math.sin(math.pi / 8))   # circumradius
-AP = R * math.cos(math.pi / 8)                  # apothem
+def _circumradius(n): return SIDE / (2.0 * math.sin(math.pi / n))
+def _apothem(n):      return _circumradius(n) * math.cos(math.pi / n)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 src = Wad(os.path.join(HERE, SRC_WAD))
@@ -44,43 +44,53 @@ match = build_matcher(pal)
 # other -- prboom's numnodes==0 path (src/r_main.c:466) means "one subsector,
 # draw everything", which only ever worked because one octagon is convex.
 #
-# Wall k faces outward at -pi*(k+1)/4, so wall 6 faces NE; the branch room's
-# doorway is wall 2, which faces back SW toward main.
+# Each room carries its own side count, so one can be given an extra wall
+# without touching the other. The team room is a NONAGON: one wall goes to the
+# doorway, and an octagon leaves only seven after that -- one short of the
+# eight people who recorded a message.
 # ---------------------------------------------------------------------------
 
-MAIN_C     = (0.0, 0.0)
-MAIN_DOORS = {6: 2}             # main wall -> the branch room's facing wall
+ROOMS = [
+    {'name': 'main', 'key': 'lenny', 'label': 'Lenny',         'sides': 8},
+    {'name': 'team', 'key': 'team',  'label': 'From the team', 'sides': 9},
+]
+MAIN, TEAM = ROOMS
+MAIN_DOOR  = 6                  # main wall the hallway leaves by
+TEAM_DOOR  = 0                  # team wall it arrives at
+ROOM_INDEX = dict((r['name'], i) for i, r in enumerate(ROOMS))
 
-# key + label per room. The key is what videos.json groups its IDs under, so
-# adding or moving a screen never has to be mirrored as an index shuffle there.
-ROOM_META  = {'main':    ('lenny', 'Lenny'),
-              'branch6': ('team',  'From the team')}
+def _normal(rm, k):
+    """Outward bearing of wall k -- the direction its midpoint faces."""
+    return -2.0 * math.pi * (k + 1) / rm['sides'] + rm['rot']
 
-def _corner(c, k):
-    a = -(math.pi / 8 + k * math.pi / 4)        # clockwise
-    return (c[0] + R * math.cos(a), c[1] + R * math.sin(a))
+def _corner(rm, k):
+    n = rm['sides']
+    a = -(math.pi / n + k * 2.0 * math.pi / n) + rm['rot']   # clockwise
+    return (rm['c'][0] + rm['R'] * math.cos(a),
+            rm['c'][1] + rm['R'] * math.sin(a))
 
-def _wall_normal(k):
-    return -math.pi * (k + 1) / 4.0
+for _rm in ROOMS:
+    _rm['R'], _rm['AP'] = _circumradius(_rm['sides']), _apothem(_rm['sides'])
+MAIN['rot'], MAIN['c'] = 0.0, (0.0, 0.0)
+
+# Rotate the team room so its doorway wall points straight back down the
+# hallway. With equal side counts some wall always happened to line up; with
+# 8 against 9 none does, and without the rotation the corridor would meet the
+# room at an angle and the outline would cross itself.
+_out = _normal(MAIN, MAIN_DOOR)
+TEAM['rot'] = _out + math.pi + 2.0 * math.pi * (TEAM_DOOR + 1) / TEAM['sides']
+_d = MAIN['AP'] + HALL_LEN + TEAM['AP']
+TEAM['c'] = (MAIN['c'][0] + _d * math.cos(_out), MAIN['c'][1] + _d * math.sin(_out))
 
 def _lerp(p, q, t):
     return (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t)
 
-def _wall_pts(c, k, door=False):
+def _wall_pts(rm, k, door=False):
     """corner, then the two edges of the centred screen (or doorway)."""
-    a, b = _corner(c, k), _corner(c, k + 1)
+    a, b = _corner(rm, k), _corner(rm, k + 1)
     L = math.hypot(b[0] - a[0], b[1] - a[1])
     w = DOOR_W if door else SCREEN_W
     return a, _lerp(a, b, (L - w) / 2.0 / L), _lerp(a, b, (L + w) / 2.0 / L)
-
-BRANCH_C = {}
-for _k in MAIN_DOORS:
-    _a = _wall_normal(_k)
-    _d = 2 * AP + HALL_LEN
-    BRANCH_C[_k] = (MAIN_C[0] + _d * math.cos(_a), MAIN_C[1] + _d * math.sin(_a))
-
-ROOMS = [('main', MAIN_C)] + [('branch%d' % k, BRANCH_C[k]) for k in sorted(MAIN_DOORS)]
-ROOM_INDEX = dict((n, i) for i, (n, _) in enumerate(ROOMS))
 
 EDGES   = []      # (a, b, wall_tex or None, screen_index or None)
 SCREENS = []      # {'room', 'centre', 'a', 'b', 'name'}
@@ -96,7 +106,7 @@ def _edge(a, b, screen_room=None):
                         'a': a, 'b': b})
         EDGES.append((a, b, None, len(SCREENS) - 1, None))
 
-def _plain_wall(c, k, room):
+def _plain_wall(rm, k):
     """A screen centred on the wall, with a plain stub either side.
 
     The stubs are tagged with the screen they flank. A 256-wide screen on a
@@ -105,45 +115,44 @@ def _plain_wall(c, k, room):
     quarter of the shots aimed at a video hit bare wall instead. Treating the
     whole octagon side as one target makes aiming say what it looks like it
     says, without shrinking the margin to nothing."""
-    a, s1, s2 = _wall_pts(c, k)
+    a, s1, s2 = _wall_pts(rm, k)
     lead = len(EDGES)
     _edge(a, s1)
-    _edge(s1, s2, screen_room=room)
+    _edge(s1, s2, screen_room=rm['name'])
     idx = len(SCREENS) - 1
-    _edge(s2, _corner(c, k + 1))
+    _edge(s2, _corner(rm, k + 1))
     for e in range(lead, len(EDGES)):
         if EDGES[e][3] is None:
             EDGES[e] = EDGES[e][:4] + (idx,)
 
-def _branch_loop(c, j, room, entry):
+def _branch_loop(rm, j, entry):
     """From the doorway edge we arrived at, clockwise all the way back to the
     other doorway edge.
 
     `entry` is the opening edge the hallway lands on; the stub of the doorway
     wall between it and the next corner still has to be emitted, otherwise the
     outline dangles there and the loop never closes."""
-    _, e1, _e2 = _wall_pts(c, j, door=True)
-    _edge(entry, _corner(c, j + 1))          # rest of the doorway wall
-    for n in range(1, 8):
-        _plain_wall(c, (j + n) % 8, room)
-    _edge(_corner(c, j), e1)                 # up to the far opening edge
+    _, e1, _e2 = _wall_pts(rm, j, door=True)
+    _edge(entry, _corner(rm, j + 1))         # rest of the doorway wall
+    for n in range(1, rm['sides']):
+        _plain_wall(rm, (j + n) % rm['sides'])
+    _edge(_corner(rm, j), e1)                # up to the far opening edge
     return e1
 
-for k in range(8):
-    if k in MAIN_DOORS:
-        c2, j = BRANCH_C[k], MAIN_DOORS[k]
-        a, d1, d2 = _wall_pts(MAIN_C, k, door=True)
-        _, e1, e2 = _wall_pts(c2, j, door=True)
+for k in range(MAIN['sides']):
+    if k == MAIN_DOOR:
+        a, d1, d2 = _wall_pts(MAIN, k, door=True)
+        _, e1, e2 = _wall_pts(TEAM, TEAM_DOOR, door=True)
         # pair the corridor walls so they run parallel rather than crossing
         if math.hypot(d1[0] - e2[0], d1[1] - e2[1]) > math.hypot(d1[0] - e1[0], d1[1] - e1[1]):
             e1, e2 = e2, e1
         _edge(a, d1)
         _edge(d1, e2)                                   # hallway wall, outbound
-        r1 = _branch_loop(c2, j, 'branch%d' % k, e2)
+        r1 = _branch_loop(TEAM, TEAM_DOOR, e2)
         _edge(r1, d2)                                   # hallway wall, back
-        _edge(d2, _corner(MAIN_C, k + 1))
+        _edge(d2, _corner(MAIN, k + 1))
     else:
-        _plain_wall(MAIN_C, k, 'main')
+        _plain_wall(MAIN, k)
 
 NUM_SCREENS = len(SCREENS)
 SCREEN_TEXS = ['WISTSC%02d' % i for i in range(NUM_SCREENS)]
@@ -635,8 +644,8 @@ open(os.path.join(OUT_DIR, 'screen.json'), 'w').write(json.dumps({
     # Every wall segment, so the runtime can raycast the player's aim and know
     # exactly which wall is being shot. The room is convex, so a ray from any
     # interior point crosses exactly one segment -- no occlusion to worry about.
-    'rooms': [{'key': ROOM_META[n][0], 'name': ROOM_META[n][1],
-               'centre': [round(c[0]), round(c[1])]} for (n, c) in ROOMS],
+    'rooms': [{'key': rm['key'], 'name': rm['label'],
+               'centre': [round(rm['c'][0]), round(rm['c'][1])]} for rm in ROOMS],
     # 'screen' is the wall that IS a video; 'flank' is a plain stub beside one,
     # which aims at the same video so the whole octagon side is one target.
     'walls': [
@@ -649,6 +658,38 @@ open(os.path.join(OUT_DIR, 'screen.json'), 'w').write(json.dumps({
 }, indent=1))
 print('wrote %d screens, screens.bin (%d bytes), sig %d bytes each'
       % (len(screens), len(screens) * SCREEN_W * SCREEN_H, SIG_LEN))
+
+# ---------------------------------------------------------------------------
+# videos.json has to keep up with the map.
+#
+# A room that is NOT shuffled needs exactly one ID per wall. With fewer, a wall
+# sits on static forever; with more, the surplus is silently ignored -- which
+# is precisely how an eighth team message could be added and simply never
+# appear, with nothing anywhere reporting a problem. A shuffled room is a pool
+# and only needs enough to fill its walls.
+# ---------------------------------------------------------------------------
+
+VJSON = os.path.join(OUT_DIR, 'videos.json')
+if os.path.exists(VJSON):
+    _v = json.load(open(VJSON))
+    _shuffled = set(_v.get('shuffle', []))
+    for _i, _rm in enumerate(ROOMS):
+        _walls = sum(1 for s in SCREENS if s['room'] == _i)
+        _ids = _v.get('rooms', {}).get(_rm['key'], [])
+        if _rm['key'] in _shuffled:
+            assert len(_ids) >= _walls, (
+                'videos.json: pool %r holds %d IDs but %r has %d walls'
+                % (_rm['key'], len(_ids), _rm['name'], _walls))
+        else:
+            assert len(_ids) == _walls, (
+                'videos.json: room %r lists %d IDs for %d walls -- '
+                'add a wall (raise its "sides") or drop an ID'
+                % (_rm['key'], len(_ids), _walls))
+        assert len(set(_ids)) == len(_ids), 'videos.json: %r repeats an ID' % _rm['key']
+        print('  %-6s %2d IDs / %d walls%s'
+              % (_rm['key'], len(_ids), _walls,
+                 ' (pool)' if _rm['key'] in _shuffled else ''))
+
 
 # ---------------------------------------------------------------------------
 # sprite previews (debug aid; `python3 build_tribute.py --preview`)

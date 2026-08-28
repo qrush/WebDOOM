@@ -23,7 +23,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev34-captions';
+  var BUILD = 'rev35-shuffle';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -603,10 +603,31 @@
        because its last wall is emitted after the whole branch loop), so a flat
        index-keyed list would quietly hang a team video on a Lenny wall. */
     var byRoom = res[3].rooms || {}, taken = {}, labels = res[3].labels || {};
+
+    /* A room named in videos.json's "shuffle" is a POOL: it holds more IDs than
+       the room has walls, and each page load draws a fresh subset, so the Lenny
+       room is different every visit. Shuffling is opt-in per room rather than
+       "shuffle whenever the list is longer than the wall count" -- under that
+       rule, adding an eighth message to the team room would silently start
+       dropping somebody at random. Fisher-Yates on a COPY: byRoom is the parsed
+       sidecar and gets read again per screen. */
+    var doShuffle = res[3].shuffle || [], drawn = {};
+    function listFor(key) {
+      if (drawn[key]) return drawn[key];
+      var src = (byRoom[key] || []).slice();
+      if (doShuffle.indexOf(key) >= 0) {
+        for (var i = src.length - 1; i > 0; i--) {
+          var j = Math.floor(Math.random() * (i + 1)), t = src[i];
+          src[i] = src[j]; src[j] = t;
+        }
+      }
+      return (drawn[key] = src);
+    }
+
     videoIds = meta.screens.map(function (def) {
       var key = (meta.rooms[def.room] || {}).key;
       var n = taken[key] = (taken[key] || 0) + 1;
-      return (byRoom[key] || [])[n - 1] || null;
+      return listFor(key)[n - 1] || null;   // extra pool entries sit this load out
     });
 
     screens = meta.screens.map(function (def, i) {

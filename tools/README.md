@@ -60,6 +60,14 @@ Screens: one doorway per room leaves 7 of its 8 walls free, so it is exactly
 7 + 7 = 14. Adding a second doorway (the earlier three-room triangle) costs the
 main room a screen, which is why that version could only be 6/7/7.
 
+A room named in `videos.json`'s `shuffle` list is a **pool**: it may hold more
+IDs than the room has walls, and each page load draws a fresh random subset
+(Fisher-Yates), so the Lenny room is different every visit -- 23 videos for 7
+walls. Shuffling is opt-in per room rather than "shuffle whenever the list is
+longer than the wall count", because under that rule adding an eighth message
+to the team room would silently start dropping somebody at random. `team` is
+therefore never shuffled: fixed order, exact wall count.
+
 `videos.json` also carries a `labels` map, hashed-ID -> the caption shown under
 the full-quality player. The request uploads are named after their source files
 in Wistia ("Uploaded by Rachel via request - bob_10_years.mov"), so the team

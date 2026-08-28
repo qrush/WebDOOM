@@ -50,22 +50,28 @@ Outputs:
 
 ## Map layout
 
-Three octagonal rooms in a triangle: a main room with a hallway branching to
-each of the other two. Every floor and ceiling is at the same height, so the
-whole complex is a **single sector** whose boundary is one closed loop -- walk
-the main room clockwise and, at each doorway, detour out along the hallway,
-around the branch room, and back. Every linedef stays one-sided and there are
-no two-sided lines to get wrong.
+Two octagonal rooms joined by a hallway running north-east. Every floor and
+ceiling is at the same height, so the whole complex is a **single sector**
+whose boundary is one closed loop -- walk the main room clockwise and, at the
+doorway, detour out along the hallway, around the branch room, and back. Every
+linedef stays one-sided and there are no two-sided lines to get wrong.
 
-Screens: 6 in the main room (two of its eight walls are doorways) and 7 in each
-branch room = 20. `public/videos.json` maps one Wistia hashed-ID per screen in
-`WISTSC00..WISTSC19` order.
+Screens: one doorway per room leaves 7 of its 8 walls free, so it is exactly
+7 + 7 = 14. Adding a second doorway (the earlier three-room triangle) costs the
+main room a screen, which is why that version could only be 6/7/7.
+
+`public/videos.json` groups IDs under a **room key** (`lenny`, `team`), not by
+screen index, and hands them out in wall order. Screen numbering interleaves
+across rooms -- the main room owns `WISTSC00..05` *and* `WISTSC13`, because its
+last wall is emitted after the whole branch loop -- so a flat index-keyed list
+is a trap. The keys and labels live in `ROOM_META` in `build_tribute.py` and
+travel to the runtime through `screen.json`.
 
 ## bsp.py
 
 The single-room map shipped **zero** BSP nodes, which prboom reads as "one
 subsector, draw everything" (`src/r_main.c:466`). That is only correct while
-the map is convex. Three rooms joined by hallways are not, so `bsp.py` builds a
+the map is convex. Rooms joined by a hallway are not, so `bsp.py` builds a
 real tree: pick a partition, split straddling segs, recurse, and emit nodes
 post-order so the root lands last (the renderer starts at `numnodes-1`).
 

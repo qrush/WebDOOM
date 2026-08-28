@@ -26,8 +26,12 @@ pal = palette(src)
 match = build_matcher(pal)
 
 # ---------------------------------------------------------------------------
-# Three octagonal rooms in a triangle: a main room with a hallway branching to
-# each of the other two.
+# Two octagonal rooms joined by a hallway: you spawn in the Lenny room and walk
+# north-east into the room where the team speaks.
+#
+# One doorway per room means seven walls left over in each, which is exactly
+# the seven-videos-a-room split we want. (The three-room version spent two of
+# the main room's walls on doorways, so it could only ever be 6/7/7.)
 #
 # Every floor and ceiling is at the same height, so the whole complex is a
 # SINGLE sector whose boundary is one closed, non-self-intersecting loop --
@@ -40,12 +44,17 @@ match = build_matcher(pal)
 # other -- prboom's numnodes==0 path (src/r_main.c:466) means "one subsector,
 # draw everything", which only ever worked because one octagon is convex.
 #
-# Wall k faces outward at -pi*(k+1)/4, so wall 4 faces NW and wall 6 faces NE;
-# each branch room's doorway is the wall pointing back toward main.
+# Wall k faces outward at -pi*(k+1)/4, so wall 6 faces NE; the branch room's
+# doorway is wall 2, which faces back SW toward main.
 # ---------------------------------------------------------------------------
 
 MAIN_C     = (0.0, 0.0)
-MAIN_DOORS = {4: 0, 6: 2}       # main wall -> the branch room's facing wall
+MAIN_DOORS = {6: 2}             # main wall -> the branch room's facing wall
+
+# key + label per room. The key is what videos.json groups its IDs under, so
+# adding or moving a screen never has to be mirrored as an index shuffle there.
+ROOM_META  = {'main':    ('lenny', 'Lenny'),
+              'branch6': ('team',  'From the team')}
 
 def _corner(c, k):
     a = -(math.pi / 8 + k * math.pi / 4)        # clockwise
@@ -526,7 +535,12 @@ for name, data in build_sprite_replacements().items():
     out.lumps.append((name, data))
 out.lumps.append(('S_END', b''))
 
-out.save(os.path.join(HERE, OUT_WAD))
+# straight into public/, alongside the sidecars. Writing the WAD next to this
+# script while screen.json/screens.bin went to public/ meant a rebuild updated
+# one and not the other, and a stale WAD paired with fresh sidecars fails in
+# the worst way: the signatures no longer match any composite in the heap, so
+# every screen just stays static with no error anywhere.
+out.save(os.path.join(OUT_DIR, OUT_WAD))
 print('wrote %s: %d lumps' % (OUT_WAD, len(out.lumps)))
 
 # ---------------------------------------------------------------------------
@@ -608,7 +622,8 @@ open(os.path.join(OUT_DIR, 'screen.json'), 'w').write(json.dumps({
     # Every wall segment, so the runtime can raycast the player's aim and know
     # exactly which wall is being shot. The room is convex, so a ray from any
     # interior point crosses exactly one segment -- no occlusion to worry about.
-    'rooms': [{'name': n, 'centre': [round(c[0]), round(c[1])]} for (n, c) in ROOMS],
+    'rooms': [{'key': ROOM_META[n][0], 'name': ROOM_META[n][1],
+               'centre': [round(c[0]), round(c[1])]} for (n, c) in ROOMS],
     'walls': [
         {'a': list(VERTS[a]), 'b': list(VERTS[b]),
          'screen': (SCREEN_TEXS.index(t) if t in SCREEN_TEXS else None)}

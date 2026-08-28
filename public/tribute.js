@@ -1,7 +1,8 @@
 'use strict';
 /*
- * WebDOOM 10-year tribute -- an octagonal room with a Wistia video on each of
- * its eight walls, plus proximity audio and a full-quality overlay player.
+ * WebDOOM 10-year tribute -- two octagonal rooms joined by a hallway, with a
+ * Wistia video on each of their seven free walls, plus proximity audio and a
+ * full-quality overlay player.
  *
  * WHY THIS WRITES INTO WASM MEMORY:
  * The prebuilt engine runs prboom's SOFTWARE renderer. src/m_misc.c:308-313
@@ -22,7 +23,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev31-no-hands';
+  var BUILD = 'rev32-two-rooms';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -256,7 +257,7 @@
 
   var currentRoom = -1;
 
-  /* Which room the player is standing in, by nearest room centre. With 20
+  /* Which room the player is standing in, by nearest room centre. With 14
      screens, decoding every video at once is hopeless -- only the current
      room's videos are allowed to play; the rest are paused so they cost
      nothing. */
@@ -584,7 +585,16 @@
     meta = res[0];
     lut = new Uint8Array(res[1]);
     expected = new Uint8Array(res[2]);
-    videoIds = res[3].screens;
+    /* videos.json groups IDs by room key and hands them out in wall order.
+       Screen indices interleave across rooms (the first room owns 0-5 and 13,
+       because its last wall is emitted after the whole branch loop), so a flat
+       index-keyed list would quietly hang a team video on a Lenny wall. */
+    var byRoom = res[3].rooms || {}, taken = {};
+    videoIds = meta.screens.map(function (def) {
+      var key = (meta.rooms[def.room] || {}).key;
+      var n = taken[key] = (taken[key] || 0) + 1;
+      return (byRoom[key] || [])[n - 1] || null;
+    });
 
     screens = meta.screens.map(function (def, i) {
       var cv = document.createElement('canvas');
@@ -630,7 +640,7 @@
 
     var hint = document.createElement('div');
     hint.id = 'tribute-hint';
-    hint.textContent = 'W A S D move · Q E turn (or mouse) · three rooms to explore · shoot a screen to watch it';
+    hint.textContent = 'W A S D move · Q E turn (or mouse) · two rooms to explore · shoot a screen to watch it';
     document.body.appendChild(hint);
 
     ['pointerdown', 'keydown'].forEach(function (ev) {

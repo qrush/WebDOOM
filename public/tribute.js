@@ -23,7 +23,7 @@
   // sidecars are regenerated whenever the map changes; a cached copy
   // silently breaks texture lookup, so always revalidate them
   var NOCACHE = { cache: 'no-cache' };
-  var BUILD = 'rev33-aim';
+  var BUILD = 'rev34-captions';
 
   var MEDIA_JSON = 'https://fast.wistia.net/embed/medias/';
 
@@ -524,12 +524,12 @@
       '  <div class="wistia_responsive_padding" style="padding:56.25% 0 0 0;position:relative;">' +
       '    <div class="wistia_responsive_wrapper" style="height:100%;left:0;position:absolute;top:0;width:100%;">' +
       '      <iframe src="https://fast.wistia.net/embed/iframe/' + sc.id +
-                 '?web_component=true&seo=false&autoPlay=true" title="' + (sc.name || 'Wistia video') + '" ' +
+                 '?web_component=true&seo=false&autoPlay=true" title="' + (sc.label || sc.name || 'Wistia video') + '" ' +
                  'allow="autoplay; fullscreen" allowtransparency="true" frameborder="0" scrolling="no" ' +
                  'class="wistia_embed" name="wistia_embed" width="100%" height="100%"></iframe>' +
       '    </div>' +
       '  </div>' +
-      '  <div class="to-caption">' + (sc.name || '') + '</div>' +
+      '  <div class="to-caption">' + (sc.label || sc.name || '') + '</div>' +
       '</div>';
     document.body.appendChild(overlay);
     overlay.querySelector('.to-close').addEventListener('click', closeOverlay);
@@ -602,7 +602,7 @@
        Screen indices interleave across rooms (the first room owns 0-5 and 13,
        because its last wall is emitted after the whole branch loop), so a flat
        index-keyed list would quietly hang a team video on a Lenny wall. */
-    var byRoom = res[3].rooms || {}, taken = {};
+    var byRoom = res[3].rooms || {}, taken = {}, labels = res[3].labels || {};
     videoIds = meta.screens.map(function (def) {
       var key = (meta.rooms[def.room] || {}).key;
       var n = taken[key] = (taken[key] || 0) + 1;
@@ -616,7 +616,12 @@
         def: def, addr: -1, cursor: 0, wrote: false, dist: 1e9,
         buf: new Uint8Array(def.bufferLength),
         canvas: cv, ctx: cv.getContext('2d', { willReadFrequently: true }),
-        video: null, id: videoIds[i] || null, name: null
+        video: null, id: videoIds[i] || null, name: null,
+        /* Caption override from videos.json. The Wistia titles for the request
+           uploads are filenames ("Uploaded by Rachel via request -
+           bob_10_years.mov"), which is not what you want under the player.
+           Null for the Lenny room, which falls back to the real title. */
+        label: (videoIds[i] && labels[videoIds[i]]) || null
       };
     });
 
@@ -687,7 +692,8 @@
   window.__tribute = {
     build: BUILD,
     screens: function () { return screens.map(function (s) {
-      return { name: s.def.name, addr: s.addr, dist: Math.round(s.dist), id: s.id, title: s.name };
+      return { name: s.def.name, addr: s.addr, dist: Math.round(s.dist), id: s.id,
+               title: s.name, label: s.label, caption: s.label || s.name };
     }); },
     player: playerPos,
     angle: playerAngle,

@@ -60,6 +60,14 @@ Screens: one doorway per room leaves 7 of its 8 walls free, so it is exactly
 7 + 7 = 14. Adding a second doorway (the earlier three-room triangle) costs the
 main room a screen, which is why that version could only be 6/7/7.
 
+`videos.json` also carries a `labels` map, hashed-ID -> the caption shown under
+the full-quality player. The request uploads are named after their source files
+in Wistia ("Uploaded by Rachel via request - bob_10_years.mov"), so the team
+room overrides them with "From <name>". Overriding here rather than renaming in
+Wistia keeps the library untouched and stops a caption changing under us if
+someone renames a video. Unlabelled IDs fall back to the Wistia title, which is
+what the Lenny room uses.
+
 Each screen's wall also emits two plain stubs (256-wide video on a 320-wide
 wall), and those stubs are tagged in `screen.json` with the screen they
 `flank`. The runtime treats a hit on a stub as a hit on that video, so the

@@ -9,7 +9,14 @@
   "0-5 AND 13, because its last wall is emitted after the whole branch loop).",
   "",
   "Each ID is resolved to a CORS-enabled MP4 at runtime via",
-  "https://fast.wistia.net/embed/medias/<id>.json -- IDs only, no URLs to rot."
+  "https://fast.wistia.net/embed/medias/<id>.json -- IDs only, no URLs to rot.",
+  "",
+  "'labels' overrides the caption under the full-quality player. Without it the",
+  "caption is whatever the media is called in Wistia, which for the request",
+  "uploads is a filename ('Uploaded by Rachel via request - bob_10_years.mov').",
+  "Overriding here rather than renaming in Wistia keeps the library untouched",
+  "and means a caption cannot silently change because someone renamed a video.",
+  "Unlabelled IDs (the Lenny room) fall back to the Wistia title."
  ],
  "rooms": {
   "lenny": [
@@ -50,5 +57,14 @@
    "Appreciation Message from Lamp",
    "Recorded by Beth via request"
   ]
+ },
+ "labels": {
+  "buwo9kw12g": "From Morgan",
+  "hmwex9l58j": "From Nick",
+  "gjvkqv1o25": "From Gordie",
+  "jw14fy3uuu": "From Rachel",
+  "5b4p3qusap": "From Thijs",
+  "jrt3st1a7r": "From Lamp",
+  "pya7sh9tr8": "From Beth"
  }
 }
